@@ -748,6 +748,12 @@ body.redact .recap-list {
   transition: filter 0.15s ease;
 }
 
+/* ---- cost estimate labelling ---- */
+.est { font-size: 0.82em; opacity: 0.6; font-weight: 500; letter-spacing: 0.02em; cursor: help; }
+.cost-note { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted);
+  margin: -4px 0 14px; opacity: 0.85; }
+.cost-note svg { flex-shrink: 0; opacity: 0.7; }
+
 /* ---- daily recap panel ---- */
 .recap-panel .panel-title { display: flex; align-items: center; gap: 8px; }
 .btn-xs { padding: 3px 7px; font-size: 11px; line-height: 1; margin-left: auto; }

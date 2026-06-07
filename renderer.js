@@ -32,6 +32,9 @@ const ICONS = {
   branch: '<line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
 };
 
+// Shown on every cost figure so the dollar number is never mistaken for a bill.
+const COST_TIP = "Estimate — your recorded token usage × Anthropic's public API prices. On a Pro/Max subscription you aren't billed per token, so treat this as a usage measure, not a bill.";
+
 function svg(name, w = 17) {
   return `<svg width="${w}" height="${w}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${ICONS[name]}</svg>`;
 }
@@ -231,7 +234,7 @@ function makeCard(p) {
     <div class="card-summary" data-slot="summary"></div>
     <div class="metrics-row" data-slot="metrics">
       <div class="metric"><div class="m-ico">${svg('clock', 15)}</div><div><div class="m-val" data-slot="time">·</div><div class="m-lbl">time</div></div></div>
-      <div class="metric"><div class="m-ico">${svg('coin', 15)}</div><div><div class="m-val" data-slot="cost">·</div><div class="m-lbl">cost</div></div></div>
+      <div class="metric" title="${COST_TIP}"><div class="m-ico">${svg('coin', 15)}</div><div><div class="m-val" data-slot="cost">·</div><div class="m-lbl">cost <span class="est">est.</span></div></div></div>
       <div class="spark-wrap" data-slot="spark"></div>
     </div>
     <div class="stats">
@@ -883,7 +886,7 @@ async function openDetail(p) {
   body.innerHTML = `
     <div class="kpis">
       <div class="kpi"><div class="kpi-val">${fmtDuration(t.activeMs)}</div><div class="kpi-lbl">Time spent</div></div>
-      <div class="kpi"><div class="kpi-val">${fmtCost(t.cost)}</div><div class="kpi-lbl">Total cost</div></div>
+      <div class="kpi" title="${COST_TIP}"><div class="kpi-val">${fmtCost(t.cost)}</div><div class="kpi-lbl">Total cost <span class="est">est.</span></div></div>
       <div class="kpi"><div class="kpi-val">${fmtNum(t.sessions)}</div><div class="kpi-lbl">Sessions</div></div>
       <div class="kpi"><div class="kpi-val">${fmtNum(t.turns)}</div><div class="kpi-lbl">Turns</div></div>
       <div class="kpi"><div class="kpi-val">${fmtTokens(totalTokens)}</div><div class="kpi-lbl">Tokens</div></div>
@@ -1054,10 +1057,11 @@ async function loadOverview(days) {
   body.innerHTML = `
     <div class="kpis">
       <div class="kpi"><div class="kpi-val">${fmtDuration(t.activeMs)}</div><div class="kpi-lbl">Time · ${rangeWord}</div></div>
-      <div class="kpi"><div class="kpi-val">${fmtCost(t.cost)}</div><div class="kpi-lbl">Cost · ${rangeWord}</div></div>
+      <div class="kpi" title="${COST_TIP}"><div class="kpi-val">${fmtCost(t.cost)}</div><div class="kpi-lbl">Cost · ${rangeWord} <span class="est">est.</span></div></div>
       <div class="kpi"><div class="kpi-val">${fmtNum(t.sessions)}</div><div class="kpi-lbl">Sessions</div></div>
       <div class="kpi"><div class="kpi-val">${fmtNum(t.projects)}</div><div class="kpi-lbl">Projects active</div></div>
     </div>
+    <p class="cost-note">${svg('coin', 12)} Cost is an estimate — recorded tokens × Anthropic's public API prices. Not a bill if you're on a Pro/Max subscription.</p>
     <div class="panel recap-panel">
       <div class="panel-title">Today's recap
         <button class="btn ghost btn-xs recap-refresh" title="Regenerate today's recap">${svg('repeat', 14)}</button>
