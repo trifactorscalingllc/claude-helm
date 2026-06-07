@@ -335,27 +335,48 @@ function setupAutoUpdate() {
   }
 }
 
+// Locate the installer electron-updater already downloaded (updater cache is
+// named from the npm package name, not the productName).
+function findPendingInstaller() {
+  try {
+    const dir = path.join(HOME, 'AppData', 'Local', 'claude-launcher-updater', 'pending');
+    const f = fs.readdirSync(dir).find((n) => /Setup.*\.exe$/i.test(n));
+    return f ? path.join(dir, f) : '';
+  } catch { return ''; }
+}
+
 ipcMain.handle('install-update', () => {
   try {
     app.isQuitting = true;
-    // Safeguard for UNSIGNED Windows builds: the NSIS installer can hit
-    // "failed to uninstall old application files" (exit 2) when Defender locks
-    // the old exe — the upgrade still applies, but NSIS skips its own relaunch,
-    // leaving the app closed. Spawn a detached watcher that reopens the app a
-    // few seconds after the installer settles (two attempts, fast + slow disks).
-    // The single-instance lock makes a redundant launch harmless — it just
-    // focuses the window NSIS may have already reopened.
+    const exe = process.execPath;
+    const installer = process.platform === 'win32' ? findPendingInstaller() : '';
+
+    // PREFERRED (unsigned Windows): run the downloaded installer OURSELVES, but
+    // only AFTER a short delay once the app has fully exited. The "failed to
+    // uninstall old application files (2)" dialog is caused by Windows Defender
+    // still holding the old exe when NSIS's immediate uninstall runs; giving it
+    // a few seconds lets the handle release so the uninstall succeeds cleanly
+    // (no dialog). Then relaunch. Single-instance lock dedupes any double-start.
+    if (installer) {
+      const cmd = `ping -n 5 127.0.0.1 >nul & "${installer}" /S & ping -n 12 127.0.0.1 >nul & start "" "${exe}" & ping -n 6 127.0.0.1 >nul & start "" "${exe}"`;
+      spawn(process.env.ComSpec || 'cmd.exe', ['/c', cmd],
+        { detached: true, stdio: 'ignore', windowsVerbatimArguments: true }).unref();
+      BrowserWindow.getAllWindows().forEach((w) => { try { w.removeAllListeners('close'); w.close(); } catch {} });
+      setImmediate(() => app.quit());
+      return;
+    }
+
+    // FALLBACK: electron-updater's own install, plus a relaunch watcher so the
+    // app still reopens even if NSIS skips its run-after on the exit-2 path.
     if (process.platform === 'win32') {
       try {
-        const exe = process.execPath; // same path after the in-place upgrade
         const relaunch = `ping -n 8 127.0.0.1 >nul & start "" "${exe}" & ping -n 14 127.0.0.1 >nul & start "" "${exe}"`;
         spawn(process.env.ComSpec || 'cmd.exe', ['/c', relaunch],
           { detached: true, stdio: 'ignore', windowsVerbatimArguments: true }).unref();
       } catch {}
     }
-    // close windows first so no renderer holds files, then silent install + relaunch
     BrowserWindow.getAllWindows().forEach((w) => { try { w.removeAllListeners('close'); w.close(); } catch {} });
-    setImmediate(() => autoUpdater.quitAndInstall(true, true)); // isSilent=true → NSIS /S, force-closes; isForceRunAfter=true
+    setImmediate(() => autoUpdater.quitAndInstall(true, true));
   } catch {}
 });
 ipcMain.handle('check-update', () => {
