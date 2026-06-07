@@ -440,6 +440,7 @@ function syncSettingsUI() {
   $('optBudgetWeekly').value = cfg.budgetWeekly || '';
   $('optBudgetMonthly').value = cfg.budgetMonthly || '';
   $('optNotifications').checked = cfg.notifications !== false;
+  $('optRedact').checked = !!cfg.redact;
   const osNames = { win32: 'Windows Terminal', darwin: 'macOS Terminal/iTerm', linux: 'Linux terminal' };
   $('osName').textContent = osNames[window.launcher.platform] || window.launcher.platform;
   updateApiHint();
@@ -1060,6 +1061,11 @@ async function doCreate() {
 window.addEventListener('error', (e) => console.error('renderer error:', e.message));
 window.addEventListener('unhandledrejection', (e) => console.error('renderer rejection:', e.reason));
 
+function applyRedact(on) {
+  document.body.classList.toggle('redact', !!on);
+  const t = $('optRedact'); if (t) t.checked = !!on;
+}
+
 function applyTheme(theme) {
   document.documentElement.setAttribute('data-theme', theme);
   const btn = $('themeToggle');
@@ -1133,6 +1139,16 @@ async function init() {
   hydrateIcons();
   cfg = await window.launcher.getConfig();
   applyTheme(cfg.theme || 'light');
+  applyRedact(cfg.redact);
+  // quick toggle for screenshots / screen-sharing
+  document.addEventListener('keydown', async (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'B' || e.key === 'b')) {
+      e.preventDefault();
+      cfg.redact = await window.launcher.setRedact(!document.body.classList.contains('redact'));
+      applyRedact(cfg.redact);
+      showStatus(cfg.redact ? 'Descriptions blurred (for screenshots).' : 'Blur off.', 'ok');
+    }
+  });
 
   // indexing indicator (only show if it takes a moment)
   let indexed = false;
@@ -1192,6 +1208,7 @@ async function init() {
   $('optBudgetWeekly').addEventListener('change', async (e) => { const r = await window.launcher.setBudget({ weekly: e.target.value }); cfg.budgetWeekly = r.budgetWeekly; showStatus('Weekly budget saved.', 'ok'); });
   $('optBudgetMonthly').addEventListener('change', async (e) => { const r = await window.launcher.setBudget({ monthly: e.target.value }); cfg.budgetMonthly = r.budgetMonthly; showStatus('Monthly budget saved.', 'ok'); });
   $('optNotifications').addEventListener('change', async (e) => { cfg.notifications = await window.launcher.setNotifications(e.target.checked); });
+  $('optRedact').addEventListener('change', async (e) => { cfg.redact = await window.launcher.setRedact(e.target.checked); applyRedact(cfg.redact); });
 
   $('tagFilter').addEventListener('change', (e) => { tagFilter = e.target.value; render(); });
   $('archToggle').addEventListener('click', () => { showArchived = !showArchived; $('archToggle').classList.toggle('active', showArchived); render(); });

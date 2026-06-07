@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('launcher', {
   setApiKey: (key) => ipcRenderer.invoke('set-api-key', key),
   setAiSummaries: (on) => ipcRenderer.invoke('set-ai-summaries', on),
   setTheme: (theme) => ipcRenderer.invoke('set-theme', theme),
+  setRedact: (on) => ipcRenderer.invoke('set-redact', on),
   setAutoTrust: (on) => ipcRenderer.invoke('set-auto-trust', on),
   completeOnboarding: (patch) => ipcRenderer.invoke('complete-onboarding', patch),
   detectClaude: () => ipcRenderer.invoke('detect-claude'),

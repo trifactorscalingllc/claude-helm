@@ -701,3 +701,21 @@ select:focus { outline: none; border-color: var(--clay); }
 .rm-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
 .mem.idea { cursor: pointer; }
 .idea-add { font-size: 11.5px; color: var(--clay-deep); font-weight: 600; margin-top: 8px; }
+
+/* ---- privacy/screenshot blur (toggle via Settings or Ctrl+Shift+B) ---- */
+body.redact .card-summary,
+body.redact .ctx-title,
+body.redact .sr-snip,
+body.redact .detail-summary,
+body.redact .bd-name,
+body.redact .leg-name,
+body.redact .s-title,
+body.redact .routine-prompt,
+body.redact .routine-output,
+body.redact .t-text,
+body.redact .t-result,
+body.redact .kv .file-name {
+  filter: blur(6px);
+  transition: filter 0.15s ease;
+}
+kbd { font-family: "SFMono-Regular","Consolas",monospace; font-size: 10.5px; background: var(--cloud-2); border: 1px solid var(--line-2); border-radius: 3px; padding: 0 4px; }

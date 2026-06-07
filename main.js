@@ -28,6 +28,7 @@ const DEFAULTS = {
   archived: [],        // project paths hidden from the dashboard
   tags: {},            // { projectPath: "client"|"personal"|... }
   routines: [],        // recurring `claude -p` tasks
+  redact: false,       // blur descriptions for screenshots/screen-sharing (off by default)
 };
 
 const AI_CACHE_PATH = path.join(app.getPath('userData'), 'ai-summaries.json');
@@ -1314,6 +1315,13 @@ ipcMain.handle('create-root', (_e, root) => {
   const dir = root || loadConfig().root;
   try { fs.mkdirSync(dir, { recursive: true }); return { ok: true, path: dir }; }
   catch (err) { return { ok: false, error: err.message }; }
+});
+
+ipcMain.handle('set-redact', (_e, on) => {
+  const cfg = loadConfig();
+  cfg.redact = !!on;
+  saveConfig(cfg);
+  return cfg.redact;
 });
 
 ipcMain.handle('set-theme', (_e, theme) => {
