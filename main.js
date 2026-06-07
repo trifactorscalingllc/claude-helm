@@ -28,6 +28,18 @@ const AI_CACHE_PATH = path.join(app.getPath('userData'), 'ai-summaries.json');
 
 let mainWindow = null;
 
+// Single-instance lock — prevents multiple copies (which made updates fail to auto-close).
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+}
+
 const indexer = new Indexer(
   CLAUDE_PROJECTS_DIR,
   path.join(app.getPath('userData'), 'metrics-index.json')
@@ -110,7 +122,13 @@ function setupAutoUpdate() {
   }
 }
 
-ipcMain.handle('install-update', () => { try { autoUpdater.quitAndInstall(); } catch {} });
+ipcMain.handle('install-update', () => {
+  try {
+    // close windows first so no renderer holds files, then silent install + relaunch
+    BrowserWindow.getAllWindows().forEach((w) => { try { w.removeAllListeners('close'); w.close(); } catch {} });
+    setImmediate(() => autoUpdater.quitAndInstall(true, true)); // isSilent=true → NSIS /S, force-closes; isForceRunAfter=true
+  } catch {}
+});
 ipcMain.handle('check-update', () => { if (app.isPackaged) autoUpdater.checkForUpdates().catch(() => {}); });
 
 app.whenReady().then(() => {
