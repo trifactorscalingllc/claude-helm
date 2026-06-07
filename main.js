@@ -51,13 +51,16 @@ async function runIndex() {
 function loadConfig() {
   try {
     const parsed = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+    // Migration: a config file already exists → this is a returning user.
+    // Don't re-onboard them just because the `onboarded` flag was added later.
+    if (!('onboarded' in parsed)) parsed.onboarded = true;
     return {
       ...DEFAULTS,
       ...parsed,
       launch: { ...DEFAULTS.launch, ...(parsed.launch || {}) },
     };
   } catch {
-    return { ...DEFAULTS };
+    return { ...DEFAULTS }; // no config file → genuine first run → onboarded:false
   }
 }
 

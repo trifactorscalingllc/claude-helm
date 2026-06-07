@@ -886,16 +886,24 @@ async function showOnboarding() {
     const c = await window.launcher.pickRoot();
     if (c) { chosenRoot = c.root; $('obRoot').textContent = chosenRoot; const r = await window.launcher.checkRoot(chosenRoot); $('obRootHint').textContent = r.exists ? '' : 'Will be created.'; }
   });
-  $('obStart').addEventListener('click', async () => {
-    const r = await window.launcher.checkRoot(chosenRoot);
-    if (!r.exists) await window.launcher.createRoot(chosenRoot);
-    cfg = await window.launcher.completeOnboarding({ root: chosenRoot, theme: chosenTheme, autoTrust: chosenTrust });
-    applyTheme(cfg.theme);
-    $('footRoot').textContent = cfg.root;
+  const finish = async (applyChoices) => {
+    if (applyChoices) {
+      const r = await window.launcher.checkRoot(chosenRoot);
+      if (!r.exists) await window.launcher.createRoot(chosenRoot);
+      cfg = await window.launcher.completeOnboarding({ root: chosenRoot, theme: chosenTheme, autoTrust: chosenTrust });
+      applyTheme(cfg.theme);
+      $('footRoot').textContent = cfg.root;
+    }
     ov.classList.add('hidden');
     await loadProjects();
-  }, { once: true });
+  };
+  $('obStart').addEventListener('click', () => finish(true), { once: true });
+  // dismiss without finishing (backdrop / Escape) still marks onboarded so it never re-nags
+  ov.addEventListener('click', (e) => { if (e.target === ov) finish(false); });
+  document.addEventListener('keydown', function esc(e) { if (e.key === 'Escape' && !ov.classList.contains('hidden')) { document.removeEventListener('keydown', esc); finish(false); } });
 
+  // mark onboarded immediately so it shows at most once, even if the app is closed now
+  window.launcher.completeOnboarding({}).then((c) => { cfg = c; });
   ov.classList.remove('hidden');
 }
 
