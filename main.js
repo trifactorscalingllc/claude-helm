@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Tray, Menu, nativeImage, Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const fsp = fs.promises;
@@ -22,6 +22,11 @@ const DEFAULTS = {
   terminalCommand: '', // optional custom terminal template with {dir} and {cmd}
   autoTrust: false,    // off by default — opt-in (writes hasTrustDialogAccepted)
   onboarded: false,    // first-run setup completed
+  budgetWeekly: 0,     // $ weekly budget (0 = off)
+  budgetMonthly: 0,    // $ monthly budget (0 = off)
+  notifications: true, // desktop notifications (session finished, budget)
+  archived: [],        // project paths hidden from the dashboard
+  tags: {},            // { projectPath: "client"|"personal"|... }
 };
 
 const AI_CACHE_PATH = path.join(app.getPath('userData'), 'ai-summaries.json');
@@ -56,6 +61,117 @@ async function runIndex() {
   } finally {
     indexing = false;
   }
+}
+
+// ---------- formatting (shared with tray) ----------
+function fmtDur(ms) {
+  if (!ms) return '0m';
+  const min = Math.round(ms / 60000);
+  if (min < 60) return min + 'm';
+  const h = Math.floor(min / 60), r = min % 60;
+  return r && h < 10 ? `${h}h ${r}m` : `${h}h`;
+}
+function fmtMoney(n) {
+  if (!n) return '$0';
+  if (n < 0.01) return '<$0.01';
+  if (n < 1000) return '$' + n.toFixed(2);
+  return '$' + Math.round(n).toLocaleString();
+}
+
+// ---------- tray ----------
+let tray = null;
+function buildTray() {
+  try {
+    let img = nativeImage.createFromPath(path.join(__dirname, 'icon.png'));
+    if (!img.isEmpty()) img = img.resize({ width: 16, height: 16 });
+    tray = new Tray(img.isEmpty() ? nativeImage.createEmpty() : img);
+    tray.setToolTip('Claude Helm');
+    tray.on('click', showMainWindow);
+    updateTray();
+  } catch (err) { console.error('tray error:', err.message); }
+}
+function showMainWindow() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  } else { createWindow(); }
+}
+function updateTray() {
+  if (!tray) return;
+  const today = indexer.spendInDays(1);
+  const week = indexer.spendInDays(7);
+  const active = indexer.activeProjects();
+  const dot = active.length ? '🟢 ' : '';
+  tray.setToolTip(`Claude Helm — today ${fmtDur(today.activeMs)} · ${fmtMoney(today.cost)}`);
+  const menu = Menu.buildFromTemplate([
+    { label: `${dot}Today: ${fmtDur(today.activeMs)} · ${fmtMoney(today.cost)}`, enabled: false },
+    { label: `This week: ${fmtDur(week.activeMs)} · ${fmtMoney(week.cost)}`, enabled: false },
+    ...(active.length ? [{ label: `Active now: ${active.map((a) => a.name).join(', ')}`, enabled: false }] : []),
+    { type: 'separator' },
+    { label: 'Open Claude Helm', click: showMainWindow },
+    { label: 'Quit', click: () => { app.isQuitting = true; app.quit(); } },
+  ]);
+  tray.setContextMenu(menu);
+}
+
+// ---------- notifications ----------
+function notify(title, body) {
+  if (!loadConfig().notifications) return;
+  if (!Notification.isSupported()) return;
+  try {
+    const n = new Notification({ title, body, icon: path.join(__dirname, 'icon.png') });
+    n.on('click', showMainWindow);
+    n.show();
+  } catch {}
+}
+
+let notifiedBudget = {}; // key -> true, dedup per period+threshold
+function weekKey() { const d = new Date(); const onejan = new Date(d.getFullYear(), 0, 1); const w = Math.ceil((((d - onejan) / 86400000) + onejan.getDay() + 1) / 7); return d.getFullYear() + '-W' + w; }
+function monthKey() { const d = new Date(); return d.getFullYear() + '-' + (d.getMonth() + 1); }
+
+// session-end notifier: track which projects are "active", notify when one leaves the set.
+let activeSet = {};
+function checkActivity() {
+  const active = indexer.activeProjects(150000); // active within 2.5 min
+  const nowActive = {};
+  active.forEach((a) => { nowActive[a.path] = a; });
+  // ended = was active, now not
+  for (const p in activeSet) {
+    if (!nowActive[p]) {
+      const m = indexer.metricsFor(p);
+      const name = p.split(/[\\/]/).pop();
+      notify('Session finished', `${name} — ${fmtDur(m ? m.totals.activeMs : 0)} total · ${fmtMoney(m ? m.totals.cost : 0)}`);
+    }
+  }
+  activeSet = nowActive;
+}
+
+function checkBudgets() {
+  const cfg = loadConfig();
+  const checks = [
+    { on: cfg.budgetWeekly > 0, spend: indexer.spendInDays(7).cost, budget: cfg.budgetWeekly, label: 'weekly', key: 'w' + weekKey() },
+    { on: cfg.budgetMonthly > 0, spend: indexer.spendInDays(30).cost, budget: cfg.budgetMonthly, label: 'monthly', key: 'm' + monthKey() },
+  ];
+  for (const c of checks) {
+    if (!c.on) continue;
+    const pct = c.spend / c.budget;
+    const k80 = c.key + ':80', k100 = c.key + ':100';
+    if (pct >= 1 && !notifiedBudget[k100]) {
+      notifiedBudget[k100] = true;
+      notify('Budget exceeded', `You've spent ${fmtMoney(c.spend)} this ${c.label === 'weekly' ? 'week' : 'month'} — over your ${fmtMoney(c.budget)} budget.`);
+    } else if (pct >= 0.8 && pct < 1 && !notifiedBudget[k80]) {
+      notifiedBudget[k80] = true;
+      notify('Approaching budget', `${fmtMoney(c.spend)} of your ${fmtMoney(c.budget)} ${c.label} budget (${Math.round(pct * 100)}%).`);
+    }
+  }
+}
+
+function tick() {
+  if (!indexer.loaded) return;
+  updateTray();
+  checkActivity();
+  checkBudgets();
 }
 
 // ---------- config ----------
@@ -100,6 +216,10 @@ function createWindow() {
   mainWindow.removeMenu();
   mainWindow.loadFile('index.html');
   mainWindow.on('closed', () => { mainWindow = null; });
+  // closing the window hides it to the tray (keeps monitoring); Quit from the tray to exit
+  mainWindow.on('close', (e) => {
+    if (!app.isQuitting && tray) { e.preventDefault(); mainWindow.hide(); }
+  });
 }
 
 // ---- auto-update (electron-updater → GitHub Releases) ----
@@ -124,6 +244,7 @@ function setupAutoUpdate() {
 
 ipcMain.handle('install-update', () => {
   try {
+    app.isQuitting = true;
     // close windows first so no renderer holds files, then silent install + relaunch
     BrowserWindow.getAllWindows().forEach((w) => { try { w.removeAllListeners('close'); w.close(); } catch {} });
     setImmediate(() => autoUpdater.quitAndInstall(true, true)); // isSilent=true → NSIS /S, force-closes; isForceRunAfter=true
@@ -136,17 +257,23 @@ app.whenReady().then(() => {
   startWatchers();
   setupAutoUpdate();
   indexer.load();
+  buildTray();
+  setInterval(tick, 30000); // refresh tray + notification checks every 30s
   // backfill, then tell the renderer to refresh with full data
   runIndex().then(() => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('fs-changed', 'claude');
+    tick();
   });
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
 
+app.on('before-quit', () => { app.isQuitting = true; });
+
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
+  // with a tray the app keeps running in the background; otherwise quit
+  if (process.platform !== 'darwin' && !tray) app.quit();
 });
 
 // ---------- stats ----------
@@ -391,10 +518,11 @@ function spawnTerminal(projectPath, cmd, custom) {
   }
 }
 
-function openClaudeIn(projectPath) {
+function openClaudeIn(projectPath, overrides) {
   const cfg = loadConfig();
   if (cfg.autoTrust) trustProject(projectPath); // opt-in only
-  const cmd = buildClaudeCommand(cfg.launch);
+  const launch = { ...cfg.launch, ...(overrides || {}) };
+  const cmd = buildClaudeCommand(launch);
   return spawnTerminal(projectPath, cmd, cfg.terminalCommand);
 }
 
@@ -442,7 +570,10 @@ ipcMain.handle('toggle-pin', (_e, projectPath) => {
 });
 
 ipcMain.handle('list-projects', (_e, root) => {
-  const dir = root || loadConfig().root;
+  const lpCfg = loadConfig();
+  const dir = root || lpCfg.root;
+  const tagOf = (p) => lpCfg.tags[p] || '';
+  const isArchived = (p) => lpCfg.archived.includes(p);
   let entries;
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -459,7 +590,7 @@ ipcMain.handle('list-projects', (_e, root) => {
         mtime = fs.statSync(full).mtimeMs;
         isGit = fs.existsSync(path.join(full, '.git'));
       } catch {}
-      return { name: d.name, path: full, mtime, isGit, external: false };
+      return { name: d.name, path: full, mtime, isGit, external: false, tag: tagOf(full), archived: isArchived(full) };
     })
     .sort((a, b) => b.mtime - a.mtime);
 
@@ -479,6 +610,8 @@ ipcMain.handle('list-projects', (_e, root) => {
       mtime: m.totals.lastTs || 0,
       isGit,
       external: true,
+      tag: tagOf(cwd),
+      archived: isArchived(cwd),
     });
   }
   external.sort((a, b) => b.mtime - a.mtime);
@@ -574,12 +707,77 @@ ipcMain.handle('overview-metrics', (_e, days) => {
   return { range, heatDays: indexer.combinedDaily(30) };
 });
 
-ipcMain.handle('open-project', (_e, projectPath) => {
+ipcMain.handle('open-project', (_e, projectPath, overrides) => {
   try {
-    return openClaudeIn(projectPath);
+    return openClaudeIn(projectPath, overrides);
   } catch (err) {
     return { ok: false, error: err.message };
   }
+});
+
+ipcMain.handle('set-budget', (_e, b) => {
+  const cfg = loadConfig();
+  if (b && b.weekly != null) cfg.budgetWeekly = Math.max(0, Number(b.weekly) || 0);
+  if (b && b.monthly != null) cfg.budgetMonthly = Math.max(0, Number(b.monthly) || 0);
+  saveConfig(cfg);
+  notifiedBudget = {};
+  return { budgetWeekly: cfg.budgetWeekly, budgetMonthly: cfg.budgetMonthly };
+});
+
+ipcMain.handle('set-notifications', (_e, on) => {
+  const cfg = loadConfig();
+  cfg.notifications = !!on;
+  saveConfig(cfg);
+  return cfg.notifications;
+});
+
+ipcMain.handle('budget-status', () => {
+  const cfg = loadConfig();
+  return {
+    weekly: { budget: cfg.budgetWeekly, spend: indexer.spendInDays(7).cost },
+    monthly: { budget: cfg.budgetMonthly, spend: indexer.spendInDays(30).cost },
+    today: indexer.spendInDays(1),
+  };
+});
+
+ipcMain.handle('model-spend', () => indexer.modelSpend());
+
+ipcMain.handle('toggle-archive', (_e, projectPath) => {
+  const cfg = loadConfig();
+  const i = cfg.archived.indexOf(projectPath);
+  if (i === -1) cfg.archived.push(projectPath); else cfg.archived.splice(i, 1);
+  saveConfig(cfg);
+  return cfg.archived;
+});
+
+ipcMain.handle('set-tag', (_e, { projectPath, tag }) => {
+  const cfg = loadConfig();
+  if (!tag) delete cfg.tags[projectPath]; else cfg.tags[projectPath] = tag;
+  saveConfig(cfg);
+  return cfg.tags;
+});
+
+ipcMain.handle('open-in-editor', (_e, projectPath) => {
+  if (cmdExists('code')) {
+    try {
+      if (process.platform === 'win32') spawnDetached('cmd.exe', ['/c', 'code', projectPath]);
+      else spawnDetached('/bin/sh', ['-c', `code ${shQuote(projectPath)}`]);
+      return { ok: true, via: 'vscode' };
+    } catch {}
+  }
+  shell.openPath(projectPath);
+  return { ok: true, via: 'explorer' };
+});
+
+ipcMain.handle('export-csv', async () => {
+  const list = indexer.projectsList();
+  let csv = 'Project,Path,Time (min),Cost ($),Sessions,Turns,Last Active\n';
+  for (const p of list) {
+    csv += [JSON.stringify(p.name), JSON.stringify(p.path), Math.round(p.activeMs / 60000), p.cost.toFixed(2), p.sessions, p.turns, p.lastTs ? new Date(p.lastTs).toISOString() : ''].join(',') + '\n';
+  }
+  const res = await dialog.showSaveDialog(mainWindow, { title: 'Export project stats', defaultPath: 'claude-helm-stats.csv', filters: [{ name: 'CSV', extensions: ['csv'] }] });
+  if (res.canceled || !res.filePath) return { ok: false };
+  try { fs.writeFileSync(res.filePath, csv); return { ok: true, path: res.filePath }; } catch (e) { return { ok: false, error: e.message }; }
 });
 
 ipcMain.handle('copy-text', (_e, text) => { clipboard.writeText(String(text || '')); return true; });

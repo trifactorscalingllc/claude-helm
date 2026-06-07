@@ -23,6 +23,12 @@ const ICONS = {
   user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
   bulb: '<path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.3 1 2.1V18h6v-1.2c0-.8.4-1.6 1-2.1A7 7 0 0 0 12 2z"/>',
   chev: '<path d="M9 6l6 6-6 6"/>',
+  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>',
+  dots: '<circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/>',
+  edit: '<path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>',
+  archive: '<path d="M21 8v13H3V8M1 3h22v5H1zM10 12h4"/>',
+  tag: '<path d="M20.6 13.4 11 3.8a2 2 0 0 0-1.4-.6H4a1 1 0 0 0-1 1v5.6a2 2 0 0 0 .6 1.4l9.6 9.6a2 2 0 0 0 2.8 0l4.6-4.6a2 2 0 0 0 0-2.8z"/>',
+  bolt: '<path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/>',
 };
 
 function svg(name, w = 17) {
@@ -131,6 +137,9 @@ let externalProjects = [];
 let filter = '';
 let overviewDays = 7;
 let rootError = false;
+let showArchived = false;
+let tagFilter = '';
+const TAGS = ['client', 'personal', 'work', 'archive-later'];
 
 const $ = (id) => document.getElementById(id);
 
@@ -153,10 +162,54 @@ async function handleLaunchResult(res, name) {
   }
 }
 
+// ---------- popup menu ----------
+let openMenuEl = null;
+function closeMenu() { if (openMenuEl) { openMenuEl.remove(); openMenuEl = null; document.removeEventListener('click', closeMenu); } }
+function popupMenu(anchor, items) {
+  closeMenu();
+  const m = document.createElement('div');
+  m.className = 'popmenu';
+  m.innerHTML = items.map((it, i) => it.sep
+    ? '<div class="pm-sep"></div>'
+    : `<button class="pm-item ${it.danger ? 'danger' : ''} ${it.active ? 'active' : ''}" data-i="${i}">${it.icon ? svg(it.icon, 14) : ''}<span>${escapeHtml(it.label)}</span></button>`).join('');
+  document.body.appendChild(m);
+  const r = anchor.getBoundingClientRect();
+  const mw = 210;
+  let left = r.right - mw; if (left < 8) left = 8;
+  let top = r.bottom + 4;
+  if (top + m.offsetHeight > window.innerHeight - 8) top = r.top - m.offsetHeight - 4;
+  m.style.left = left + 'px'; m.style.top = top + 'px';
+  m.querySelectorAll('.pm-item').forEach((b) => b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const it = items[Number(b.dataset.i)];
+    closeMenu();
+    if (it.onClick) it.onClick();
+  }));
+  openMenuEl = m;
+  setTimeout(() => document.addEventListener('click', closeMenu), 0);
+}
+
+async function openCardMenu(anchor, p) {
+  const launch = async (model) => { const r = await window.launcher.openProject(p.path, model ? { model } : undefined); await handleLaunchResult(r, p.name); };
+  const items = [
+    { label: 'Open with Opus', icon: 'bolt', onClick: () => launch('opus') },
+    { label: 'Open with Sonnet', icon: 'bolt', onClick: () => launch('sonnet') },
+    { label: 'Open with Haiku', icon: 'bolt', onClick: () => launch('haiku') },
+    { sep: true },
+    { label: 'Open in editor', icon: 'edit', onClick: async () => { await window.launcher.openInEditor(p.path); } },
+    { sep: true },
+    ...TAGS.map((t) => ({ label: `Tag: ${t}`, icon: 'tag', active: p.tag === t, onClick: async () => { await window.launcher.setTag(p.path, p.tag === t ? '' : t); await loadProjects(); } })),
+    ...(p.tag ? [{ label: 'Clear tag', onClick: async () => { await window.launcher.setTag(p.path, ''); await loadProjects(); } }] : []),
+    { sep: true },
+    { label: p.archived ? 'Unarchive' : 'Archive (hide)', icon: 'archive', danger: !p.archived, onClick: async () => { await window.launcher.toggleArchive(p.path); await loadProjects(); } },
+  ];
+  popupMenu(anchor, items);
+}
+
 // ---------- card ----------
 function makeCard(p) {
   const el = document.createElement('div');
-  el.className = 'card';
+  el.className = 'card' + (p.archived ? ' archived' : '');
   const pinned = cfg.pinned.includes(p.path);
 
   el.innerHTML = `
@@ -164,6 +217,7 @@ function makeCard(p) {
       <div class="card-meta">
         <div class="card-name" title="${p.path}">${p.name} <span class="active-dot hidden" data-slot="active-dot" title="Active in Claude now">●</span></div>
         <div class="card-tags">
+          ${p.tag ? `<span class="tag tagchip">${svg('tag', 12)} ${escapeHtml(p.tag)}</span>` : ''}
           ${p.isGit ? `<span class="tag git">${svg('terminal', 13)} git</span>` : ''}
           <span class="tag">${svg('clock', 13)} ${relTime(p.mtime)}</span>
           ${p.external ? `<span class="tag ext" title="${p.path}">${svg('layers', 13)} outside folder</span>` : ''}
@@ -189,6 +243,7 @@ function makeCard(p) {
       <button class="btn primary open">${svg('terminal', 16)} Open in Claude</button>
       <button class="icon-btn details" title="View project stats">${svg('chart', 17)}</button>
       <button class="icon-btn folder" title="Open folder in Explorer">${svg('folder', 17)}</button>
+      <button class="icon-btn more" title="More actions">${svg('dots', 17)}</button>
     </div>`;
 
   el.querySelector('.open').addEventListener('click', async (e) => {
@@ -198,6 +253,7 @@ function makeCard(p) {
   });
   el.querySelector('.folder').addEventListener('click', (e) => { e.stopPropagation(); window.launcher.openInExplorer(p.path); });
   el.querySelector('.details').addEventListener('click', (e) => { e.stopPropagation(); openDetail(p); });
+  el.querySelector('.more').addEventListener('click', (e) => { e.stopPropagation(); openCardMenu(e.currentTarget, p); });
   el.querySelector('.pin-btn').addEventListener('click', async (e) => {
     e.stopPropagation();
     cfg.pinned = await window.launcher.togglePin(p.path);
@@ -274,7 +330,12 @@ async function loadStats(el, p) {
 }
 
 // ---------- render ----------
-function matches(p) { return !filter || p.name.toLowerCase().includes(filter); }
+function matches(p) {
+  if (filter && !p.name.toLowerCase().includes(filter)) return false;
+  if (tagFilter && p.tag !== tagFilter) return false;
+  if (!showArchived && p.archived) return false;
+  return true;
+}
 
 function render() {
   const list = projects.filter(matches);
@@ -341,8 +402,19 @@ async function loadProjects() {
   rootError = false;
   projects = res.projects;
   externalProjects = res.external || [];
+  populateTagFilter();
   $('footCount').textContent = `${projects.length} projects`;
   render();
+}
+
+function populateTagFilter() {
+  const sel = $('tagFilter');
+  if (!sel) return;
+  const tags = new Set();
+  [...projects, ...externalProjects].forEach((p) => { if (p.tag) tags.add(p.tag); });
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">All tags</option>' + [...tags].sort().map((t) => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
+  sel.value = cur;
 }
 
 // ---------- settings ----------
@@ -365,6 +437,9 @@ function syncSettingsUI() {
   $('optAiSummaries').disabled = !cfg.apiKey;
   $('optAutoTrust').checked = !!cfg.autoTrust;
   $('optTerminal').value = cfg.terminalCommand || '';
+  $('optBudgetWeekly').value = cfg.budgetWeekly || '';
+  $('optBudgetMonthly').value = cfg.budgetMonthly || '';
+  $('optNotifications').checked = cfg.notifications !== false;
   const osNames = { win32: 'Windows Terminal', darwin: 'macOS Terminal/iTerm', linux: 'Linux terminal' };
   $('osName').textContent = osNames[window.launcher.platform] || window.launcher.platform;
   updateApiHint();
@@ -779,16 +854,48 @@ function heatmap(days) {
   }).join('')}</div>`;
 }
 
+function budgetBar(label, spend, budget) {
+  if (!budget) return `<div class="kv"><span>${label}</span><span class="muted">${fmtCost(spend)} · no budget set</span></div>`;
+  const pct = Math.min(100, (spend / budget) * 100);
+  const over = spend > budget;
+  return `<div class="budget-row">
+    <div class="budget-head"><span>${label}</span><span class="${over ? 'over' : 'muted'}">${fmtCost(spend)} / ${fmtCost(budget)}</span></div>
+    <div class="budget-track"><div class="budget-fill ${over ? 'over' : (pct >= 80 ? 'warn' : '')}" style="width:${pct}%"></div></div>
+  </div>`;
+}
+function budgetPanel(bs, forecast) {
+  return `
+    <div class="kv"><span>Projected this month</span><span><strong>${fmtCost(forecast)}</strong> <span class="muted">at current rate</span></span></div>
+    <div style="margin-top:12px">${budgetBar('This week', bs.weekly.spend, bs.weekly.budget)}</div>
+    ${budgetBar('This month', bs.monthly.spend, bs.monthly.budget)}
+    ${(!bs.weekly.budget && !bs.monthly.budget) ? '<p class="panel-sub" style="margin-top:6px">Set a budget in Settings to get alerts.</p>' : ''}`;
+}
+function modelMixBars(ms) {
+  const entries = Object.entries(ms).filter(([, c]) => c > 0).sort((a, b) => b[1] - a[1]);
+  if (!entries.length) return '<p class="panel-sub">No spend recorded yet.</p>';
+  const max = entries[0][1];
+  return entries.map(([m, c], i) => `<div class="toolbar-row">
+    <span class="tr-name">${escapeHtml(m.replace('claude-', '').replace('unknown', '—'))}</span>
+    <div class="tr-track"><div class="tr-fill" style="width:${(c / max) * 100}%;background:${SERIES_COLORS[i % SERIES_COLORS.length]}"></div></div>
+    <span class="tr-count">${fmtCost(c)}</span>
+  </div>`).join('');
+}
+
 async function loadOverview(days) {
   overviewDays = days || overviewDays || 7;
   document.querySelectorAll('#rangeToggle button').forEach((b) =>
     b.classList.toggle('active', Number(b.dataset.days) === overviewDays));
 
-  const res = await window.launcher.overviewMetrics(overviewDays);
+  const [res, bs, ms] = await Promise.all([
+    window.launcher.overviewMetrics(overviewDays),
+    window.launcher.budgetStatus(),
+    window.launcher.modelSpend(),
+  ]);
   const r = res.range;
   const body = $('overview-body');
   const t = r.totals;
   const rangeWord = RANGE_LABEL[overviewDays] || `last ${overviewDays} days`;
+  const forecast = (bs.weekly.spend / 7) * 30; // projected monthly at this week's rate
 
   body.innerHTML = `
     <div class="kpis">
@@ -796,6 +903,16 @@ async function loadOverview(days) {
       <div class="kpi"><div class="kpi-val">${fmtCost(t.cost)}</div><div class="kpi-lbl">Cost · ${rangeWord}</div></div>
       <div class="kpi"><div class="kpi-val">${fmtNum(t.sessions)}</div><div class="kpi-lbl">Sessions</div></div>
       <div class="kpi"><div class="kpi-val">${fmtNum(t.projects)}</div><div class="kpi-lbl">Projects active</div></div>
+    </div>
+    <div class="detail-grid">
+      <div class="panel">
+        <div class="panel-title">Budget &amp; forecast</div>
+        ${budgetPanel(bs, forecast)}
+      </div>
+      <div class="panel">
+        <div class="panel-title">Spend by model <span class="panel-hint">all-time</span></div>
+        ${modelMixBars(ms)}
+      </div>
     </div>
     <div class="panel">
       <div class="panel-title">History <span class="panel-hint">active time per project · ${rangeWord}</span></div>
@@ -969,6 +1086,13 @@ async function init() {
     cfg.terminalCommand = await window.launcher.setTerminal(e.target.value);
     showStatus(cfg.terminalCommand ? 'Custom terminal saved.' : 'Using auto-detect.', 'ok');
   });
+  $('optBudgetWeekly').addEventListener('change', async (e) => { const r = await window.launcher.setBudget({ weekly: e.target.value }); cfg.budgetWeekly = r.budgetWeekly; showStatus('Weekly budget saved.', 'ok'); });
+  $('optBudgetMonthly').addEventListener('change', async (e) => { const r = await window.launcher.setBudget({ monthly: e.target.value }); cfg.budgetMonthly = r.budgetMonthly; showStatus('Monthly budget saved.', 'ok'); });
+  $('optNotifications').addEventListener('change', async (e) => { cfg.notifications = await window.launcher.setNotifications(e.target.checked); });
+
+  $('tagFilter').addEventListener('change', (e) => { tagFilter = e.target.value; render(); });
+  $('archToggle').addEventListener('click', () => { showArchived = !showArchived; $('archToggle').classList.toggle('active', showArchived); render(); });
+  $('exportCsv').addEventListener('click', async () => { const r = await window.launcher.exportCsv(); if (r && r.ok) showStatus('Exported to ' + r.path, 'ok'); });
 
   $('optApiKey').addEventListener('change', async (e) => {
     const val = e.target.value;

@@ -62,6 +62,8 @@
             <span class="ico" data-ico="search"></span>
             <input id="search" type="text" placeholder="Search projects…" autocomplete="off" spellcheck="false" />
           </div>
+          <select id="tagFilter" class="filter-sel" title="Filter by tag"><option value="">All tags</option></select>
+          <button id="archToggle" class="btn ghost" title="Show/hide archived projects">Archived</button>
           <button id="newBtn" class="btn primary">
             <span class="ico" data-ico="plus"></span> New project
           </button>
@@ -182,6 +184,27 @@
             </label>
             <div id="apiKeyHint" class="panel-sub" style="margin:6px 0 0"></div>
           </div>
+
+          <div class="panel">
+            <div class="panel-title">Budget &amp; notifications</div>
+            <p class="panel-sub">Get warned in-app and via desktop notification when spend approaches your budget. Set 0 to turn a budget off.</p>
+            <label class="field">
+              <span>Weekly budget ($)</span>
+              <input id="optBudgetWeekly" type="number" min="0" step="1" placeholder="0 = off" />
+            </label>
+            <label class="field">
+              <span>Monthly budget ($)</span>
+              <input id="optBudgetMonthly" type="number" min="0" step="1" placeholder="0 = off" />
+            </label>
+            <label class="toggle">
+              <input type="checkbox" id="optNotifications" />
+              <span class="track"></span>
+              <span class="toggle-text">
+                <strong>Desktop notifications</strong>
+                <em>When a session finishes and when you approach/exceed a budget. Also powers the system-tray summary.</em>
+              </span>
+            </label>
+          </div>
         </div>
       </section>
 
@@ -195,6 +218,7 @@
             <button data-days="30">1 Month</button>
             <button data-days="90">3 Months</button>
           </div>
+          <button id="exportCsv" class="btn ghost"><span class="ico" data-ico="download"></span> Export</button>
         </header>
         <div class="scroll">
           <div id="overview-body"></div>

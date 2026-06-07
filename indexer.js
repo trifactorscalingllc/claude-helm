@@ -392,6 +392,50 @@ class Indexer {
     return out;
   }
 
+  // Total cost + active time over the last `days` calendar days (for budgets/today).
+  spendInDays(days) {
+    const arr = this.combinedDaily(days);
+    return arr.reduce((acc, d) => { acc.cost += d.cost; acc.activeMs += d.activeMs; return acc; }, { cost: 0, activeMs: 0 });
+  }
+
+  // $ attributed by primary model of each session.
+  modelSpend() {
+    const out = {};
+    for (const cwd in this.store.projects) {
+      const sessions = this.store.projects[cwd].sessions;
+      for (const id in sessions) {
+        const s = sessions[id];
+        let model = 'unknown', max = -1;
+        for (const m in (s.models || {})) { if (s.models[m] > max) { max = s.models[m]; model = m; } }
+        out[model] = (out[model] || 0) + (s.cost || 0);
+      }
+    }
+    return out;
+  }
+
+  // Projects with a session touched within `withinMs` (default 2 min) — "active now".
+  activeProjects(withinMs = 120000) {
+    const now = Date.now();
+    const out = [];
+    for (const cwd in this.store.projects) {
+      const m = this.metricsFor(cwd);
+      if (m && m.totals.lastTs && now - m.totals.lastTs < withinMs) {
+        out.push({ path: cwd, name: cwd.split(/[\\/]/).pop() || cwd, lastTs: m.totals.lastTs });
+      }
+    }
+    return out;
+  }
+
+  // For the session-finished notifier: latest activity timestamp per project.
+  lastActivityMap() {
+    const out = {};
+    for (const cwd in this.store.projects) {
+      const m = this.metricsFor(cwd);
+      if (m) out[cwd] = { lastTs: m.totals.lastTs, name: cwd.split(/[\\/]/).pop() || cwd, cost: m.totals.cost, activeMs: m.totals.activeMs };
+    }
+    return out;
+  }
+
   overview() {
     let cost = 0, activeMs = 0, sessions = 0, turns = 0;
     const dailyMap = {};
