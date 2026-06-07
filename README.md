@@ -41,9 +41,9 @@ event's `cwd`. It computes time (sum of inter-message gaps, capped at 5-min idle
 (token usage × a Claude price table — Opus $5/$25, Sonnet $3/$15, Haiku $1/$5 per 1M
 in/out, cache-write 1.25× / cache-read 0.1×), tool/file/model tallies, and per-day rollups,
 persisted to `metrics-index.json` in the app's userData. Backfills once on startup, then
-incremental on every change. Most of your projects start at 0 because Claude runs logged
-under `cwd = C:\Users\biery`; opening a project via this launcher (which starts in the
-project dir) attributes future sessions to that project.
+incremental on every change. Some projects start at 0 because Claude sessions are logged
+under the `cwd` they ran in (often your home dir); opening a project via this app (which
+starts Claude *in* the project dir) attributes future sessions to that project.
 
 ### Settings
 - **Projects folder** — pick which folder to scan (remembered between runs).
@@ -66,14 +66,16 @@ project dir) attributes future sessions to that project.
 - `preload.js` — safe `contextIsolation` bridge exposing those handlers + the change event.
 - `index.html` / `renderer.js` / `styles.css` — sidebar dashboard UI in Claude's palette
   (cloud cream + clay coral), Inter type, recreated Claude sunburst mark, inline SVG icons.
-- `start.bat` / `start.vbs` — clear `NODE_OPTIONS` (Electron rejects some inherited flags)
-  and launch the app with no console window. The Desktop shortcut points at `start.vbs`.
 
-## Run from terminal instead
+All paths are derived from the current user's home at runtime (`app.getPath('home')`), so it
+works for whoever installs it — no hardcoded paths.
+
+## Build from source
 
 ```
-cd C:\Users\biery\projects\claude-launcher
-npm start
+npm install
+npm start          # run in dev
+npm run dist       # build the Windows installer into dist/
 ```
 
-Default projects root: `C:\Users\biery\projects`.
+Default projects root: `<your-home>/projects` (changeable in Settings).
