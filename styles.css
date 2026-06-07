@@ -619,3 +619,17 @@ select:focus { outline: none; border-color: var(--clay); }
 
 /* ---- version label ---- */
 .foot-ver { margin-top: 8px; font-size: 10.5px; color: var(--muted); letter-spacing: 0.02em; }
+
+/* ---- onboarding + robustness banners ---- */
+.banner.warn { color: #8a5a2b; border-color: #e6c48a; background: #fbf3e2; }
+[data-theme="dark"] .banner.warn { color: #e0b070; border-color: #5a4a2a; background: #2b2519; }
+.banner-x { margin-left: 8px; color: var(--clay-deep); cursor: pointer; font-weight: 600; text-decoration: underline; }
+#indexBanner { color: var(--muted); }
+
+.onboard-modal { width: 440px; max-width: 92vw; }
+.ob-status { font-size: 12.5px; line-height: 1.5; padding: 10px 12px; border-radius: 7px; margin-bottom: 16px; }
+.ob-status.ok { color: var(--good); background: #eef5ef; border: 1px solid #cfe3d4; }
+.ob-status.warn { color: #8a5a2b; background: #fbf3e2; border: 1px solid #e6c48a; }
+[data-theme="dark"] .ob-status.ok { background: #1c2a20; border-color: #2f4a36; color: #7fb98f; }
+[data-theme="dark"] .ob-status.warn { background: #2b2519; border-color: #5a4a2a; color: #e0b070; }
+.empty .btn { margin: 4px; }

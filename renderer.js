@@ -130,6 +130,7 @@ let projects = [];
 let externalProjects = [];
 let filter = '';
 let overviewDays = 7;
+let rootError = false;
 
 const $ = (id) => document.getElementById(id);
 
@@ -296,8 +297,10 @@ function render() {
 
   $('allCount').textContent = rest.length;
   const empty = $('empty');
-  if (!list.length) {
-    empty.textContent = filter ? `No projects match "${filter}".` : 'No project folders found here.';
+  if (rootError) {
+    empty.classList.remove('hidden'); // keep the actionable folder message set by loadProjects
+  } else if (!list.length) {
+    empty.textContent = filter ? `No projects match "${filter}".` : 'No project folders found here yet. Click "New project" to create one.';
     empty.classList.remove('hidden');
   } else {
     empty.classList.add('hidden');
@@ -319,14 +322,25 @@ function render() {
 async function loadProjects() {
   const res = await window.launcher.listProjects(cfg.root);
   if (res.error) {
+    rootError = true;
     projects = [];
     externalProjects = [];
-    $('empty').textContent = res.error;
-    $('empty').classList.remove('hidden');
-  } else {
-    projects = res.projects;
-    externalProjects = res.external || [];
+    const empty = $('empty');
+    empty.innerHTML = `Your projects folder isn't available:<br><code>${escapeHtml(cfg.root)}</code><br><br>
+      <button class="btn primary" id="emptyCreate">Create this folder</button>
+      <button class="btn ghost" id="emptyChoose">Choose another</button>`;
+    empty.classList.remove('hidden');
+    const c = document.getElementById('emptyCreate');
+    if (c) c.addEventListener('click', async () => { await window.launcher.createRoot(cfg.root); await loadProjects(); });
+    const ch = document.getElementById('emptyChoose');
+    if (ch) ch.addEventListener('click', async () => { const r = await window.launcher.pickRoot(); if (r) { cfg = r; $('footRoot').textContent = cfg.root; await loadProjects(); } });
+    $('footCount').textContent = '—';
+    render();
+    return;
   }
+  rootError = false;
+  projects = res.projects;
+  externalProjects = res.external || [];
   $('footCount').textContent = `${projects.length} projects`;
   render();
 }
@@ -349,6 +363,7 @@ function syncSettingsUI() {
   $('optApiKey').value = cfg.apiKey ? '••••••••••••••••' : '';
   $('optAiSummaries').checked = !!cfg.aiSummaries;
   $('optAiSummaries').disabled = !cfg.apiKey;
+  $('optAutoTrust').checked = !!cfg.autoTrust;
   $('optTerminal').value = cfg.terminalCommand || '';
   const osNames = { win32: 'Windows Terminal', darwin: 'macOS Terminal/iTerm', linux: 'Linux terminal' };
   $('osName').textContent = osNames[window.launcher.platform] || window.launcher.platform;
@@ -843,13 +858,72 @@ function applyTheme(theme) {
   }
 }
 
+// ---------- first-run onboarding + robustness ----------
+async function showOnboarding() {
+  const ov = $('onboard');
+  let chosenRoot = cfg.root;
+  let chosenTheme = cfg.theme || 'light';
+  let chosenTrust = false;
+
+  $('obRoot').textContent = chosenRoot;
+  const det = await window.launcher.detectClaude();
+  $('obClaude').className = 'ob-status ' + (det.found ? 'ok' : 'warn');
+  $('obClaude').textContent = det.found
+    ? '✓ Claude Code detected — you\'re ready to launch projects.'
+    : '⚠ Claude Code CLI not found. Install it (claude.com/claude-code) to launch projects. You can still set up the dashboard now.';
+  const rc = await window.launcher.checkRoot(chosenRoot);
+  $('obRootHint').textContent = rc.exists ? '' : 'Doesn\'t exist yet — it\'ll be created.';
+
+  ov.querySelectorAll('#obTheme button').forEach((b) => {
+    b.classList.toggle('active', b.dataset.theme === chosenTheme);
+    b.addEventListener('click', () => {
+      chosenTheme = b.dataset.theme; applyTheme(chosenTheme);
+      ov.querySelectorAll('#obTheme button').forEach((x) => x.classList.toggle('active', x === b));
+    });
+  });
+  $('obAutoTrust').addEventListener('change', (e) => { chosenTrust = e.target.checked; });
+  $('obChoose').addEventListener('click', async () => {
+    const c = await window.launcher.pickRoot();
+    if (c) { chosenRoot = c.root; $('obRoot').textContent = chosenRoot; const r = await window.launcher.checkRoot(chosenRoot); $('obRootHint').textContent = r.exists ? '' : 'Will be created.'; }
+  });
+  $('obStart').addEventListener('click', async () => {
+    const r = await window.launcher.checkRoot(chosenRoot);
+    if (!r.exists) await window.launcher.createRoot(chosenRoot);
+    cfg = await window.launcher.completeOnboarding({ root: chosenRoot, theme: chosenTheme, autoTrust: chosenTrust });
+    applyTheme(cfg.theme);
+    $('footRoot').textContent = cfg.root;
+    ov.classList.add('hidden');
+    await loadProjects();
+  }, { once: true });
+
+  ov.classList.remove('hidden');
+}
+
+async function detectClaudeBanner() {
+  const det = await window.launcher.detectClaude();
+  const b = $('claudeBanner');
+  if (det.found) { b.classList.add('hidden'); return; }
+  b.innerHTML = '⚠ Claude Code CLI not detected on PATH — install it from claude.com/claude-code to launch projects. <span class="banner-x">Dismiss</span>';
+  b.classList.remove('hidden');
+  b.querySelector('.banner-x').addEventListener('click', () => b.classList.add('hidden'));
+}
+
 async function init() {
   hydrateIcons();
   cfg = await window.launcher.getConfig();
   applyTheme(cfg.theme || 'light');
+
+  // indexing indicator (only show if it takes a moment)
+  let indexed = false;
+  setTimeout(() => { if (!indexed) $('indexBanner').classList.remove('hidden'); }, 700);
+  const clearIndex = () => { indexed = true; $('indexBanner').classList.add('hidden'); };
+  setTimeout(clearIndex, 12000); // fallback
   window.launcher.appVersion().then((v) => { $('footVer').textContent = 'Claude Helm v' + v; });
   $('footRoot').textContent = cfg.root;
   await loadProjects();
+
+  if (!cfg.onboarded) showOnboarding();
+  else detectClaudeBanner();
 
   $('themeToggle').addEventListener('click', async () => {
     const next = (cfg.theme === 'dark') ? 'light' : 'dark';
@@ -879,6 +953,10 @@ async function init() {
   $('optModel').addEventListener('change', (e) => saveLaunch({ model: e.target.value }));
   $('optContinue').addEventListener('change', (e) => saveLaunch({ continue: e.target.checked }));
   $('optSkip').addEventListener('change', (e) => saveLaunch({ skipPermissions: e.target.checked }));
+  $('optAutoTrust').addEventListener('change', async (e) => {
+    cfg.autoTrust = await window.launcher.setAutoTrust(e.target.checked);
+    showStatus(cfg.autoTrust ? 'Auto-trust enabled — folders will be pre-approved.' : 'Auto-trust off — Claude will ask the first time.', 'ok');
+  });
   $('optTerminal').addEventListener('change', async (e) => {
     cfg.terminalCommand = await window.launcher.setTerminal(e.target.value);
     showStatus(cfg.terminalCommand ? 'Custom terminal saved.' : 'Using auto-detect.', 'ok');
@@ -912,6 +990,7 @@ async function init() {
 
   // live auto-refresh when projects or Claude session data change
   window.launcher.onFsChanged(() => {
+    clearIndex();
     loadProjects();
     if (!$('view-overview').classList.contains('hidden')) loadOverview(overviewDays);
   });

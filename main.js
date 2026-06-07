@@ -20,6 +20,8 @@ const DEFAULTS = {
   aiSummaries: false,
   theme: 'light',
   terminalCommand: '', // optional custom terminal template with {dir} and {cmd}
+  autoTrust: false,    // off by default — opt-in (writes hasTrustDialogAccepted)
+  onboarded: false,    // first-run setup completed
 };
 
 const AI_CACHE_PATH = path.join(app.getPath('userData'), 'ai-summaries.json');
@@ -369,8 +371,8 @@ function spawnTerminal(projectPath, cmd, custom) {
 }
 
 function openClaudeIn(projectPath) {
-  trustProject(projectPath);
   const cfg = loadConfig();
+  if (cfg.autoTrust) trustProject(projectPath); // opt-in only
   const cmd = buildClaudeCommand(cfg.launch);
   return spawnTerminal(projectPath, cmd, cfg.terminalCommand);
 }
@@ -927,6 +929,49 @@ ipcMain.handle('get-context', async () => {
 ipcMain.handle('open-memory-folder', () => {
   const encoded = HOME.replace(/[\\/:]/g, '-');
   shell.openPath(path.join(CLAUDE_PROJECTS_DIR, encoded, 'memory'));
+});
+
+ipcMain.handle('set-auto-trust', (_e, on) => {
+  const cfg = loadConfig();
+  cfg.autoTrust = !!on;
+  saveConfig(cfg);
+  return cfg.autoTrust;
+});
+
+ipcMain.handle('complete-onboarding', (_e, patch) => {
+  const cfg = loadConfig();
+  if (patch && typeof patch === 'object') {
+    if (patch.root) cfg.root = patch.root;
+    if (patch.theme) cfg.theme = patch.theme === 'dark' ? 'dark' : 'light';
+    if (typeof patch.autoTrust === 'boolean') cfg.autoTrust = patch.autoTrust;
+  }
+  cfg.onboarded = true;
+  saveConfig(cfg);
+  startWatchers();
+  return cfg;
+});
+
+// Detect a Claude Code CLI install (soft check — the login shell may still resolve it).
+ipcMain.handle('detect-claude', () => {
+  if (cmdExists('claude')) return { found: true, via: 'PATH' };
+  const candidates = process.platform === 'win32'
+    ? [path.join(HOME, '.local', 'bin', 'claude.exe'), path.join(HOME, 'AppData', 'Local', 'Programs', 'claude', 'claude.exe')]
+    : [path.join(HOME, '.local', 'bin', 'claude'), '/usr/local/bin/claude', '/opt/homebrew/bin/claude', path.join(HOME, '.claude', 'local', 'claude')];
+  for (const c of candidates) { try { if (fs.existsSync(c)) return { found: true, via: c }; } catch {} }
+  return { found: false };
+});
+
+// Does the projects root exist / is it readable?
+ipcMain.handle('check-root', (_e, root) => {
+  const dir = root || loadConfig().root;
+  try { fs.accessSync(dir, fs.constants.R_OK); return { exists: true, path: dir }; }
+  catch { return { exists: false, path: dir }; }
+});
+
+ipcMain.handle('create-root', (_e, root) => {
+  const dir = root || loadConfig().root;
+  try { fs.mkdirSync(dir, { recursive: true }); return { ok: true, path: dir }; }
+  catch (err) { return { ok: false, error: err.message }; }
 });
 
 ipcMain.handle('set-theme', (_e, theme) => {

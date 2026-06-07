@@ -68,6 +68,8 @@
         </header>
 
         <div class="scroll">
+          <div id="claudeBanner" class="banner warn hidden"></div>
+          <div id="indexBanner" class="banner hidden">Indexing your Claude history…</div>
           <div id="status" class="banner hidden"></div>
 
           <div id="pinnedWrap" class="hidden">
@@ -137,6 +139,15 @@
               <span class="toggle-text">
                 <strong>Skip permission prompts</strong>
                 <em>Runs with <code>--dangerously-skip-permissions</code>. Use with care.</em>
+              </span>
+            </label>
+
+            <label class="toggle">
+              <input type="checkbox" id="optAutoTrust" />
+              <span class="track"></span>
+              <span class="toggle-text">
+                <strong>Auto-trust folders</strong>
+                <em>Skips Claude's "Do you trust this folder?" prompt by pre-approving the folder in <code>~/.claude.json</code>. Off by default — only enable for folders you trust.</em>
               </span>
             </label>
 
@@ -276,6 +287,47 @@
     <span class="ico" data-ico="repeat"></span>
     <span id="updateMsg" class="update-msg"></span>
     <button id="updateInstall" class="btn primary hidden">Restart &amp; update</button>
+  </div>
+
+  <!-- First-run onboarding -->
+  <div id="onboard" class="modal-overlay hidden">
+    <div class="modal onboard-modal">
+      <div class="modal-burst"><span class="burst" id="onboardBurst"></span></div>
+      <h3>Welcome to Claude Helm</h3>
+      <p class="modal-sub">A quick setup and you're ready to go.</p>
+
+      <div id="obClaude" class="ob-status"></div>
+
+      <label class="field">
+        <span>Projects folder</span>
+        <div class="row">
+          <code id="obRoot" class="path-box">…</code>
+          <button id="obChoose" class="btn ghost">Choose</button>
+        </div>
+        <div id="obRootHint" class="panel-sub" style="margin:4px 0 0"></div>
+      </label>
+
+      <label class="field">
+        <span>Theme</span>
+        <div class="seg" id="obTheme">
+          <button data-theme="light" class="active">Light</button>
+          <button data-theme="dark">Dark</button>
+        </div>
+      </label>
+
+      <label class="toggle">
+        <input type="checkbox" id="obAutoTrust" />
+        <span class="track"></span>
+        <span class="toggle-text">
+          <strong>Auto-trust folders</strong>
+          <em>Skip Claude's "trust this folder?" prompt. Leave off unless you only open folders you trust.</em>
+        </span>
+      </label>
+
+      <div class="modal-actions">
+        <button id="obStart" class="btn primary">Get started</button>
+      </div>
+    </div>
   </div>
 
   <!-- New project modal -->
