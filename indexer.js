@@ -503,6 +503,29 @@ class Indexer {
     return out;
   }
 
+  // Which MCP servers/tools you lean on, aggregated from tool_use names of the
+  // form `mcp__<server>__<tool>`. Returns servers sorted by total calls.
+  mcpUsage() {
+    const servers = {};
+    for (const cwd in this.store.projects) {
+      const m = this.metricsFor(cwd);
+      if (!m) continue;
+      for (const name in m.totals.tools) {
+        if (!name.startsWith('mcp__')) continue;
+        const parts = name.split('__');
+        const server = parts[1] || 'unknown';
+        const tool = parts.slice(2).join('__') || name;
+        const c = m.totals.tools[name];
+        if (!servers[server]) servers[server] = { server, count: 0, tools: {} };
+        servers[server].count += c;
+        servers[server].tools[tool] = (servers[server].tools[tool] || 0) + c;
+      }
+    }
+    return Object.values(servers)
+      .sort((a, b) => b.count - a.count)
+      .map((s) => ({ server: s.server, count: s.count, tools: Object.entries(s.tools).sort((a, b) => b[1] - a[1]).slice(0, 6) }));
+  }
+
   // Deeper analytics for the Overview: efficiency, week-over-week trend,
   // busiest hour/day, and the most expensive / longest sessions.
   insights() {

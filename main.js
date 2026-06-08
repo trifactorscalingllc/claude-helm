@@ -33,6 +33,7 @@ const DEFAULTS = {
   openAtLogin: false,  // launch Claude Helm when you log in
   startHidden: false,  // when launched at login, start minimized to the tray
   adminKey: '',        // optional Anthropic Admin API key for real billed usage
+  notes: {},           // { projectPath: "freeform note" }
 };
 
 const AI_CACHE_PATH = path.join(app.getPath('userData'), 'ai-summaries.json');
@@ -465,10 +466,21 @@ ipcMain.handle('set-login-item', (_e, opts) => {
 
 ipcMain.handle('daily-recap', async (_e, opts) => {
   const force = !!(opts && opts.force);
+  const range = (opts && opts.range) === 'week' ? 'week' : 'today';
   const cfg = loadConfig();
-  const start = new Date(); start.setHours(0, 0, 0, 0);
-  const data = indexer.recapData(start.getTime());
-  const date = new Date().toISOString().slice(0, 10);
+  let sinceMs, label, cacheKey;
+  const today = new Date().toISOString().slice(0, 10);
+  if (range === 'week') {
+    sinceMs = Date.now() - 7 * 86400000;
+    label = 'the last 7 days';
+    cacheKey = 'week-' + today;
+  } else {
+    const start = new Date(); start.setHours(0, 0, 0, 0);
+    sinceMs = start.getTime();
+    label = 'today';
+    cacheKey = today;
+  }
+  const data = indexer.recapData(sinceMs);
   const totalMs = data.reduce((s, p) => s + p.activeMs, 0);
   const totalCost = data.reduce((s, p) => s + p.cost, 0);
   const projects = data.map((p) => ({
@@ -476,23 +488,23 @@ ipcMain.handle('daily-recap', async (_e, opts) => {
     sessions: p.sessions.length,
     titles: p.sessions.map((s) => s.title).filter(Boolean).slice(0, 4),
   }));
-  if (!data.length) return { date, empty: true, totalMs: 0, totalCost: 0, projects: [], hasKey: !!cfg.apiKey };
+  if (!data.length) return { range, empty: true, totalMs: 0, totalCost: 0, projects: [], hasKey: !!cfg.apiKey };
 
   let narrative = null, aiError = null;
   if (cfg.apiKey) {
     const hash = crypto.createHash('sha1').update(JSON.stringify(projects)).digest('hex');
     const cache = loadRecapCache();
-    const hit = cache[date];
+    const hit = cache[cacheKey];
     if (!force && hit && hit.hash === hash && hit.narrative) {
       narrative = hit.narrative;
     } else {
       try {
-        narrative = await generateRecap(projects, totalMs, totalCost, cfg.apiKey);
-        if (narrative) { cache[date] = { hash, narrative, time: Date.now() }; saveRecapCache(); }
+        narrative = await generateRecap(projects, totalMs, totalCost, cfg.apiKey, label);
+        if (narrative) { cache[cacheKey] = { hash, narrative, time: Date.now() }; saveRecapCache(); }
       } catch (err) { aiError = err.message; }
     }
   }
-  return { date, empty: false, totalMs, totalCost, projects, narrative, aiError, hasKey: !!cfg.apiKey };
+  return { range, empty: false, totalMs, totalCost, projects, narrative, aiError, hasKey: !!cfg.apiKey };
 });
 
 app.whenReady().then(() => {
@@ -973,6 +985,17 @@ ipcMain.handle('active-sessions', () => {
 ipcMain.handle('insights', () => {
   try { return indexer.insights(); } catch { return null; }
 });
+ipcMain.handle('mcp-usage', () => {
+  try { return indexer.mcpUsage(); } catch { return []; }
+});
+ipcMain.handle('set-note', (_e, projectPath, text) => {
+  const cfg = loadConfig();
+  cfg.notes = cfg.notes || {};
+  const t = String(text || '').slice(0, 4000).trim();
+  if (t) cfg.notes[projectPath] = t; else delete cfg.notes[projectPath];
+  saveConfig(cfg);
+  return { ok: true };
+});
 
 ipcMain.handle('overview-metrics', (_e, days) => {
   const range = indexer.overviewFor(days || 7);
@@ -1357,7 +1380,7 @@ function saveRecapCache() {
     fs.renameSync(tmp, RECAP_CACHE_PATH);
   } catch {}
 }
-async function generateRecap(projects, totalMs, totalCost, apiKey) {
+async function generateRecap(projects, totalMs, totalCost, apiKey, label = 'today') {
   const Anthropic = require('@anthropic-ai/sdk');
   const client = new Anthropic({ apiKey });
   const hrs = totalMs / 3600000;
@@ -1368,9 +1391,9 @@ async function generateRecap(projects, totalMs, totalCost, apiKey) {
   }).join('\n');
   const resp = await client.messages.create({
     model: 'claude-opus-4-8',
-    max_tokens: 400,
-    system: "You write a brief end-of-day standup recap for a developer, from their Claude Code activity today. 3-6 short, plain, factual bullet points about what was worked on and accomplished — no preamble, no headers, no fluff. Start each bullet with '- '. Refer to projects by name.",
-    messages: [{ role: 'user', content: `Today I spent ${hrs.toFixed(1)} hours total (~$${totalCost.toFixed(2)}) across these projects:\n\n${lines}\n\nWrite the recap.` }],
+    max_tokens: 500,
+    system: `You write a brief standup recap for a developer, from their Claude Code activity over ${label}. ${label === 'today' ? '3-6' : '4-8'} short, plain, factual bullet points about what was worked on and accomplished — no preamble, no headers, no fluff. Start each bullet with '- '. Refer to projects by name.`,
+    messages: [{ role: 'user', content: `Over ${label} I spent ${hrs.toFixed(1)} hours total (~$${totalCost.toFixed(2)}) across these projects:\n\n${lines}\n\nWrite the recap.` }],
   });
   const text = (resp.content.find((b) => b.type === 'text') || {}).text || '';
   return text.trim();

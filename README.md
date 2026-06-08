@@ -58,6 +58,7 @@ _The apps aren't code-signed yet, so each OS shows a one-time "unidentified deve
 - **⌘K command palette** — jump to any project, run a search, or switch tabs from the keyboard.
 - **Deeper analytics** — cache-hit rate, $/turn, tokens/turn, week-over-week trends, busiest hour/day, and a most-expensive-sessions leaderboard.
 - **Encrypted keys + real billing** — API keys are stored in your OS keychain (never plaintext); add an org Admin key to pull your *actual* billed month-to-date cost.
+- **Recap (today / this week)**, **MCP usage** (which servers & tools you lean on), **project notes**, and **side-by-side project compare**.
 - **System tray** — today's time + cost at a glance, plus an active-session indicator. Closing the window keeps it monitoring in the tray.
 - **Desktop notifications** + **cost alerts** — get warned when a session finishes and when you hit 80%/100% of a weekly/monthly **budget**.
 - **Overview** — range selector (1D/7D/1M/3M), per-project history chart, **spend forecast**, **spend-by-model**, 30-day heatmap, and **CSV export**.
@@ -94,8 +95,6 @@ _The apps aren't code-signed yet, so each OS shows a one-time "unidentified deve
 
 ## 🔜 Coming soon
 
-- **Weekly recap** — roll today's recap up into a "what did I do this week" digest.
-- **Project notes** — your own freeform notes per project.
 - **Code-signing** (removes the one-time "unidentified developer" prompts and enables macOS auto-update).
 
 ---

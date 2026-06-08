@@ -36,6 +36,8 @@ contextBridge.exposeInMainWorld('launcher', {
   activeSession: (preferId) => ipcRenderer.invoke('active-session', preferId),
   activeSessions: () => ipcRenderer.invoke('active-sessions'),
   insights: () => ipcRenderer.invoke('insights'),
+  mcpUsage: () => ipcRenderer.invoke('mcp-usage'),
+  setNote: (projectPath, text) => ipcRenderer.invoke('set-note', projectPath, text),
   setLoginItem: (opts) => ipcRenderer.invoke('set-login-item', opts),
   dailyRecap: (opts) => ipcRenderer.invoke('daily-recap', opts),
   openProject: (projectPath, overrides) => ipcRenderer.invoke('open-project', projectPath, overrides),

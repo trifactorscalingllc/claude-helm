@@ -270,6 +270,7 @@
             <button data-days="30">1 Month</button>
             <button data-days="90">3 Months</button>
           </div>
+          <button id="compareBtn" class="btn ghost"><span class="ico" data-ico="layers"></span> Compare</button>
           <button id="exportCsv" class="btn ghost"><span class="ico" data-ico="download"></span> Export</button>
         </header>
         <div class="scroll">
@@ -360,6 +361,21 @@
         </div>
       </section>
     </main>
+  </div>
+
+  <!-- Compare projects -->
+  <div id="compareModal" class="modal-overlay hidden">
+    <div class="modal compare-modal">
+      <h3>Compare projects</h3>
+      <p class="modal-sub">Pick two or three projects to see their time, cost, tokens, and tools side by side.</p>
+      <div class="compare-pickers">
+        <select class="cmp-pick" data-slot="0"></select>
+        <select class="cmp-pick" data-slot="1"></select>
+        <select class="cmp-pick" data-slot="2"></select>
+      </div>
+      <div id="compareResult" class="compare-result"></div>
+      <div class="modal-actions"><button id="compareClose" class="btn ghost">Close</button></div>
+    </div>
   </div>
 
   <!-- Command palette (⌘K) -->

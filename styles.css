@@ -744,6 +744,9 @@ body.redact .t-text,
 body.redact .t-result,
 body.redact .kv .file-name,
 body.redact .lead-name,
+body.redact .proj-notes,
+body.redact .mcp-name,
+body.redact .compare-table th,
 body.redact .recap-list {
   filter: blur(6px);
   transition: filter 0.15s ease;
@@ -813,8 +816,37 @@ body.redact .recap-list {
   margin: -4px 0 14px; opacity: 0.85; }
 .cost-note svg { flex-shrink: 0; opacity: 0.7; }
 
+/* ---- MCP usage ---- */
+.mcp-row { padding: 9px 0; border-bottom: 1px solid var(--line); }
+.mcp-row:last-child { border-bottom: none; }
+.mcp-head { display: flex; justify-content: space-between; font-size: 13.5px; }
+.mcp-name { font-weight: 600; color: var(--ink); }
+.mcp-tools { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.mcp-tool { font-size: 11.5px; color: var(--muted); background: var(--paper); border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; }
+.mcp-tool b { color: var(--clay-deep); }
+
+/* ---- project notes ---- */
+.proj-notes { width: 100%; min-height: 90px; resize: vertical; font-family: inherit; font-size: 13.5px;
+  color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+.proj-notes:focus { outline: none; border-color: var(--clay); }
+.notes-saved { font-size: 11.5px; margin-top: 6px; color: var(--good); }
+
+/* ---- compare projects ---- */
+.compare-modal { width: min(720px, 94vw); max-width: 720px; }
+.compare-pickers { display: flex; gap: 8px; margin: 14px 0; flex-wrap: wrap; }
+.cmp-pick { flex: 1; min-width: 150px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--ink); font-family: inherit; font-size: 13px; }
+.compare-result { overflow-x: auto; }
+.compare-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.compare-table th, .compare-table td { padding: 9px 12px; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.compare-table th { color: var(--muted); font-weight: 600; }
+.compare-table th:first-child, .compare-table .cmp-label { text-align: left; color: var(--muted); font-weight: 500; }
+.compare-table td.cmp-lead { color: var(--clay-deep); font-weight: 700; }
+
 /* ---- daily recap panel ---- */
 .recap-panel .panel-title { display: flex; align-items: center; gap: 8px; }
+.recap-range { margin-left: 4px; }
+.recap-range button { font-size: 11.5px; padding: 3px 9px; }
+.recap-panel .recap-refresh { margin-left: auto; }
 .btn-xs { padding: 3px 7px; font-size: 11px; line-height: 1; margin-left: auto; }
 .recap-stat { font-size: 12.5px; color: var(--muted); margin-bottom: 8px; font-variant-numeric: tabular-nums; }
 .recap-list { margin: 0; padding-left: 18px; }

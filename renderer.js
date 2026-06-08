@@ -141,6 +141,7 @@ let externalProjects = [];
 const cardEls = new Map(); // project path → its rendered card element (for in-place live updates)
 let filter = '';
 let overviewDays = 7;
+let recapRange = 'today'; // 'today' | 'week'
 let rootError = false;
 let showArchived = false;
 let tagFilter = '';
@@ -895,6 +896,28 @@ function barChart(series, key, fmt, label) {
   return `<div class="chart"><div class="chart-label">${label}</div><div class="bars">${bars}</div></div>`;
 }
 
+function notesPanel(p) {
+  return `<div class="panel">
+      <div class="panel-title">Notes</div>
+      <p class="panel-sub">Your own notes about this project — saved locally, just for you.</p>
+      <textarea class="proj-notes" placeholder="e.g. client contact, deploy steps, where you left off…">${escapeHtml((cfg.notes && cfg.notes[p.path]) || '')}</textarea>
+      <div class="notes-saved muted" style="visibility:hidden">Saved</div>
+    </div>`;
+}
+function wireNotes(body, p) {
+  const ta = body.querySelector('.proj-notes');
+  if (!ta) return;
+  let noteTimer = null;
+  const saved = body.querySelector('.notes-saved');
+  const save = async () => {
+    await window.launcher.setNote(p.path, ta.value);
+    cfg.notes = cfg.notes || {}; if (ta.value.trim()) cfg.notes[p.path] = ta.value.trim(); else delete cfg.notes[p.path];
+    if (saved) { saved.style.visibility = 'visible'; setTimeout(() => { saved.style.visibility = 'hidden'; }, 1500); }
+  };
+  ta.addEventListener('input', () => { clearTimeout(noteTimer); noteTimer = setTimeout(save, 700); });
+  ta.addEventListener('blur', () => { clearTimeout(noteTimer); save(); });
+}
+
 async function openDetail(p) {
   switchView('detail');
   const root = $('view-detail');
@@ -917,7 +940,8 @@ async function openDetail(p) {
   sumEl.classList.toggle('hidden', !summaryText);
   const t = d.totals;
   if (!t || t.sessions === 0) {
-    body.innerHTML = `<div class="panel"><p class="panel-sub">No Claude Code sessions recorded for this project yet. Open it in Claude and your time, cost, and activity will appear here.</p></div>`;
+    body.innerHTML = `<div class="panel"><p class="panel-sub">No Claude Code sessions recorded for this project yet. Open it in Claude and your time, cost, and activity will appear here.</p></div>${notesPanel(p)}`;
+    wireNotes(body, p);
     return;
   }
   const totalTokens = t.tokens.in + t.tokens.out + t.tokens.cw + t.tokens.cr;
@@ -976,7 +1000,10 @@ async function openDetail(p) {
           </div>`).join('')}
         </div>
       </div>
-    </div>`;
+    </div>
+    ${notesPanel(p)}`;
+
+  wireNotes(body, p);
 
   body.querySelectorAll('.session-row[data-session]').forEach((row) => {
     row.addEventListener('click', () => openTranscript({ cwd: p.path, sessionId: row.dataset.session }, 'detail'));
@@ -1122,11 +1149,12 @@ async function loadOverview(days) {
   document.querySelectorAll('#rangeToggle button').forEach((b) =>
     b.classList.toggle('active', Number(b.dataset.days) === overviewDays));
 
-  const [res, bs, ms, ins] = await Promise.all([
+  const [res, bs, ms, ins, mcp] = await Promise.all([
     window.launcher.overviewMetrics(overviewDays),
     window.launcher.budgetStatus(),
     window.launcher.modelSpend(),
     window.launcher.insights(),
+    window.launcher.mcpUsage(),
   ]);
   const r = res.range;
   const body = $('overview-body');
@@ -1147,10 +1175,14 @@ async function loadOverview(days) {
       <div id="billing-body"><p class="panel-sub">Fetching billed usage…</p></div>
     </div>` : ''}
     <div class="panel recap-panel">
-      <div class="panel-title">Today's recap
-        <button class="btn ghost btn-xs recap-refresh" title="Regenerate today's recap">${svg('repeat', 14)}</button>
+      <div class="panel-title">Recap
+        <div class="seg recap-range">
+          <button data-range="today" class="${recapRange === 'today' ? 'active' : ''}">Today</button>
+          <button data-range="week" class="${recapRange === 'week' ? 'active' : ''}">This week</button>
+        </div>
+        <button class="btn ghost btn-xs recap-refresh" title="Regenerate recap">${svg('repeat', 14)}</button>
       </div>
-      <div id="recap-body"><p class="panel-sub">Loading today's activity…</p></div>
+      <div id="recap-body"><p class="panel-sub">Loading activity…</p></div>
     </div>
     <div class="detail-grid">
       <div class="panel">
@@ -1182,6 +1214,7 @@ async function loadOverview(days) {
       </table>` : '<p class="panel-sub">No project activity in this range.</p>'}
     </div>
     ${insightsBlock(ins)}
+    ${mcpBlock(mcp)}
     <div class="panel">
       <div class="panel-title">Activity — last 30 days</div>
       ${heatmap(res.heatDays)}
@@ -1199,8 +1232,69 @@ async function loadOverview(days) {
 
   const rr = body.querySelector('.recap-refresh');
   if (rr) rr.addEventListener('click', () => loadRecap(true));
+  body.querySelectorAll('.recap-range button').forEach((b) => b.addEventListener('click', () => {
+    recapRange = b.dataset.range;
+    body.querySelectorAll('.recap-range button').forEach((x) => x.classList.toggle('active', x === b));
+    loadRecap(false);
+  }));
   loadRecap(false);
   if (cfg.hasAdminKey) loadBilling();
+}
+
+// ---------- compare projects ----------
+function openCompare() {
+  const all = [...projects, ...externalProjects];
+  if (!all.length) { showStatus('No projects to compare yet.', 'warn'); return; }
+  const opts = '<option value="">— none —</option>' + all.map((p) => `<option value="${escapeHtml(p.path)}">${escapeHtml(p.name)}</option>`).join('');
+  const picks = document.querySelectorAll('.cmp-pick');
+  picks.forEach((sel) => { sel.innerHTML = opts; });
+  if (all[0]) picks[0].value = all[0].path;
+  if (all[1]) picks[1].value = all[1].path;
+  $('compareModal').classList.remove('hidden');
+  renderCompare();
+}
+async function renderCompare() {
+  const paths = [...document.querySelectorAll('.cmp-pick')].map((s) => s.value).filter(Boolean);
+  const uniq = [...new Set(paths)];
+  const result = $('compareResult');
+  if (uniq.length < 2) { result.innerHTML = '<p class="panel-sub">Pick at least two different projects.</p>'; return; }
+  const all = [...projects, ...externalProjects];
+  const data = await Promise.all(uniq.map(async (p) => ({
+    name: (all.find((x) => x.path === p) || {}).name || p.split(/[\\/]/).pop(),
+    m: await window.launcher.projectMetrics(p),
+  })));
+  const tok = (m) => m.tokens.in + m.tokens.out + m.tokens.cw + m.tokens.cr;
+  const rows = [
+    ['Time', (d) => fmtDuration(d.m.activeMs), (d) => d.m.activeMs],
+    ['Cost (est.)', (d) => fmtCost(d.m.cost), (d) => d.m.cost],
+    ['Sessions', (d) => fmtNum(d.m.sessions), (d) => d.m.sessions],
+    ['Turns', (d) => fmtNum(d.m.turns), (d) => d.m.turns],
+    ['Tokens', (d) => fmtNum(tok(d.m)), (d) => tok(d.m)],
+    ['Cost / turn', (d) => fmtCost(d.m.turns ? d.m.cost / d.m.turns : 0), (d) => (d.m.turns ? d.m.cost / d.m.turns : 0)],
+    ['Top tool', (d) => { const t = Object.entries(d.m.tools || {}).sort((a, b) => b[1] - a[1])[0]; return t ? `${t[0]} (${fmtNum(t[1])})` : '—'; }, null],
+  ];
+  result.innerHTML = `<table class="compare-table">
+    <thead><tr><th></th>${data.map((d) => `<th>${escapeHtml(d.name)}</th>`).join('')}</tr></thead>
+    <tbody>${rows.map(([label, fn, valFn]) => {
+      const max = valFn ? Math.max(...data.map(valFn), 0) : 0;
+      return `<tr><td class="cmp-label">${label}</td>${data.map((d) => {
+        const lead = valFn && max > 0 && valFn(d) === max && data.length > 1 ? ' cmp-lead' : '';
+        return `<td class="${lead}">${fn(d)}</td>`;
+      }).join('')}</tr>`;
+    }).join('')}</tbody>
+  </table>`;
+}
+
+// which MCP servers/tools you lean on
+function mcpBlock(mcp) {
+  if (!mcp || !mcp.length) return '';
+  return `<div class="panel">
+    <div class="panel-title">MCP usage <span class="panel-hint">servers &amp; tools you lean on · all-time</span></div>
+    ${mcp.map((s) => `<div class="mcp-row">
+        <div class="mcp-head"><span class="mcp-name">${escapeHtml(s.server)}</span><span class="muted">${fmtNum(s.count)} call${s.count === 1 ? '' : 's'}</span></div>
+        <div class="mcp-tools">${s.tools.map(([t, c]) => `<span class="mcp-tool">${escapeHtml(t)} <b>${fmtNum(c)}</b></span>`).join('')}</div>
+      </div>`).join('')}
+  </div>`;
 }
 
 async function loadBilling() {
@@ -1218,12 +1312,13 @@ async function loadBilling() {
 async function loadRecap(force) {
   const bodyEl = document.getElementById('recap-body');
   if (!bodyEl) return;
-  if (force) bodyEl.innerHTML = '<p class="panel-sub">Generating recap…</p>';
-  const r = await window.launcher.dailyRecap({ force: !!force });
+  bodyEl.innerHTML = force ? '<p class="panel-sub">Generating recap…</p>' : '<p class="panel-sub">Loading activity…</p>';
+  const r = await window.launcher.dailyRecap({ force: !!force, range: recapRange });
   const node = document.getElementById('recap-body');
-  if (!node) return; // navigated away
+  if (!node || r.range !== recapRange) return; // navigated away or range switched
+  const word = recapRange === 'week' ? 'in the last 7 days' : 'yet today';
   if (r.empty) {
-    node.innerHTML = "<p class=\"panel-sub\">No Claude activity logged yet today. Open a project and it'll show up here.</p>";
+    node.innerHTML = `<p class="panel-sub">No Claude activity logged ${word}. Open a project and it'll show up here.</p>`;
     return;
   }
   const sentence = `${fmtDuration(r.totalMs)} · ${fmtCost(r.totalCost)} · ${r.projects.length} project${r.projects.length === 1 ? '' : 's'}`;
@@ -1514,6 +1609,10 @@ async function init() {
   $('tagFilter').addEventListener('change', (e) => { tagFilter = e.target.value; render(); });
   $('archToggle').addEventListener('click', () => { showArchived = !showArchived; $('archToggle').classList.toggle('active', showArchived); render(); });
   $('exportCsv').addEventListener('click', async () => { const r = await window.launcher.exportCsv(); if (r && r.ok) showStatus('Exported to ' + r.path, 'ok'); });
+  $('compareBtn').addEventListener('click', openCompare);
+  $('compareClose').addEventListener('click', () => $('compareModal').classList.add('hidden'));
+  $('compareModal').addEventListener('click', (e) => { if (e.target === $('compareModal')) $('compareModal').classList.add('hidden'); });
+  document.querySelectorAll('.cmp-pick').forEach((sel) => sel.addEventListener('change', renderCompare));
 
   $('optApiKey').addEventListener('change', async (e) => {
     const val = e.target.value;
