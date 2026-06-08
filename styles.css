@@ -827,6 +827,21 @@ body.redact .recap-list {
   margin: -4px 0 14px; opacity: 0.85; }
 .cost-note svg { flex-shrink: 0; opacity: 0.7; }
 
+/* ---- demote cost: it's an estimate, not the headline ---- */
+.kpi.quiet .kpi-val { color: var(--muted); font-weight: 600; }
+.ap-cost { opacity: 0.72; }
+
+/* ---- detail view: actions + collapsible deep stats ---- */
+.detail-actions { display: flex; gap: 8px; align-items: center; margin-bottom: 4px; }
+.detail-actions .d-open { flex: 0 0 auto; }
+details.more-detail { margin: 2px 0; }
+details.more-detail > summary { cursor: pointer; list-style: none; padding: 11px 15px; font-weight: 600;
+  font-size: 13px; color: var(--clay-deep); background: var(--paper); border: 1px solid var(--line);
+  border-radius: var(--radius); display: flex; align-items: center; gap: 9px; }
+details.more-detail > summary::-webkit-details-marker { display: none; }
+details.more-detail > summary::before { content: '▸'; font-size: 10px; transition: transform 0.15s; }
+details.more-detail[open] > summary::before { transform: rotate(90deg); }
+
 /* ---- analytics configurable chart ---- */
 .panel-title:has(.chart-controls) { display: flex; align-items: center; gap: 8px; }
 .chart-controls { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }

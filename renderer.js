@@ -942,60 +942,68 @@ async function openDetail(p) {
   const files = Object.entries(t.files).sort((a, b) => b[1] - a[1]).slice(0, 10);
   const sessions = Object.entries(d.sessions).sort((a, b) => b[1].lastTs - a[1].lastTs);
 
+  const lastId = sessions.length ? sessions[0][0] : null;
   body.innerHTML = `
-    <div class="kpis">
+    <div class="detail-actions">
+      <button class="btn primary d-open">${svg('terminal', 15)} Open in Claude</button>
+      ${lastId ? `<button class="btn ghost d-resume">${svg('message', 14)} Resume last session</button>` : ''}
+      <button class="icon-btn d-folder" title="Open folder in Explorer">${svg('folder', 16)}</button>
+    </div>
+
+    <div class="kpis usage-kpis">
       <div class="kpi"><div class="kpi-val">${fmtDuration(t.activeMs)}</div><div class="kpi-lbl">Time spent</div></div>
-      <div class="kpi" title="${COST_TIP}"><div class="kpi-val">${fmtCost(t.cost)}</div><div class="kpi-lbl">Total cost <span class="est">est.</span></div></div>
+      <div class="kpi"><div class="kpi-val">${fmtTokens(totalTokens)}</div><div class="kpi-lbl">Tokens</div></div>
       <div class="kpi"><div class="kpi-val">${fmtNum(t.sessions)}</div><div class="kpi-lbl">Sessions</div></div>
       <div class="kpi"><div class="kpi-val">${fmtNum(t.turns)}</div><div class="kpi-lbl">Turns</div></div>
-      <div class="kpi"><div class="kpi-val">${fmtTokens(totalTokens)}</div><div class="kpi-lbl">Tokens</div></div>
+      <div class="kpi quiet" title="${COST_TIP}"><div class="kpi-val">${fmtCost(t.cost)}</div><div class="kpi-lbl">Cost <span class="est">est.</span></div></div>
     </div>
 
-    <div class="detail-grid">
-      <div class="panel">${barChart(d.series, 'activeMs', fmtDuration, 'Time per day (30d)')}</div>
-      <div class="panel">${barChart(d.series, 'cost', fmtCost, 'Cost per day (30d)')}</div>
-    </div>
-
-    <div class="detail-grid">
-      <div class="panel">
-        <div class="panel-title">Token breakdown</div>
-        <table class="mini-table">
-          <tr><td>Input</td><td>${fmtTokens(t.tokens.in)}</td></tr>
-          <tr><td>Output</td><td>${fmtTokens(t.tokens.out)}</td></tr>
-          <tr><td>Cache write</td><td>${fmtTokens(t.tokens.cw)}</td></tr>
-          <tr><td>Cache read</td><td>${fmtTokens(t.tokens.cr)}</td></tr>
-        </table>
-        <div class="panel-title" style="margin-top:18px">Models</div>
-        ${models.map(([m, c]) => `<div class="kv"><span>${m.replace('claude-', '')}</span><span class="muted">${c}×</span></div>`).join('') || '<p class="panel-sub">—</p>'}
-      </div>
-      <div class="panel">
-        <div class="panel-title">Tool usage</div>
-        ${tools.map(([name, c]) => `<div class="toolbar-row"><span class="tr-name">${name}</span><div class="tr-track"><div class="tr-fill" style="width:${(c / toolMax) * 100}%"></div></div><span class="tr-count">${c}</span></div>`).join('') || '<p class="panel-sub">—</p>'}
+    <div class="panel">
+      <div class="panel-title">Sessions <span class="panel-hint">${sessions.length} · newest first · click to read</span></div>
+      <div class="session-list">
+      ${sessions.map(([id, s]) => `<div class="session-row" data-session="${escapeHtml(id)}">
+          <div class="s-main">
+            <div class="s-title">${escapeHtml(s.title || 'Untitled session')} <span class="s-open">read ›</span></div>
+            <div class="s-meta">${relTime(s.lastTs)} · ${fmtDuration(s.activeMs)} · ${s.turns} turns</div>
+          </div>
+          <button class="s-branch" title="Fork this conversation into a new Claude Code session (original untouched)">${svg('branch', 14)} Branch</button>
+        </div>`).join('')}
       </div>
     </div>
 
-    <div class="detail-grid">
-      <div class="panel">
-        <div class="panel-title">Most-edited files</div>
-        ${files.map(([f, c]) => `<div class="kv"><span title="${f}" class="file-name">${f.split(/[\\/]/).pop()}</span><span class="muted">${c} edits</span></div>`).join('') || '<p class="panel-sub">No file edits recorded.</p>'}
-      </div>
-      <div class="panel">
-        <div class="panel-title">Sessions (${sessions.length})</div>
-        <div class="session-list">
-        ${sessions.map(([id, s]) => `<div class="session-row" data-session="${escapeHtml(id)}">
-            <div class="s-main">
-              <div class="s-title">${escapeHtml(s.title || 'Untitled session')} <span class="s-open">read ›</span></div>
-              <div class="s-meta">${relTime(s.lastTs)} · ${fmtDuration(s.activeMs)} · ${fmtCost(s.cost)} · ${s.turns} turns</div>
-            </div>
-            <button class="s-branch" title="Fork this conversation into a new Claude Code session (original untouched)">${svg('branch', 14)} Branch</button>
-          </div>`).join('')}
+    <div class="panel">${barChart(d.series, 'activeMs', fmtDuration, 'Time per day · last 30 days')}</div>
+
+    <details class="more-detail">
+      <summary>Tokens, models, tools &amp; files</summary>
+      <div class="detail-grid" style="margin-top:12px">
+        <div class="panel">
+          <div class="panel-title">Tokens &amp; models</div>
+          <table class="mini-table">
+            <tr><td>Input</td><td>${fmtTokens(t.tokens.in)}</td></tr>
+            <tr><td>Output</td><td>${fmtTokens(t.tokens.out)}</td></tr>
+            <tr><td>Cache write</td><td>${fmtTokens(t.tokens.cw)}</td></tr>
+            <tr><td>Cache read</td><td>${fmtTokens(t.tokens.cr)}</td></tr>
+          </table>
+          <div class="panel-title" style="margin-top:16px">Models</div>
+          ${models.map(([m, c]) => `<div class="kv"><span>${escapeHtml(m.replace('claude-', ''))}</span><span class="muted">${c}×</span></div>`).join('') || '<p class="panel-sub">—</p>'}
+        </div>
+        <div class="panel">
+          <div class="panel-title">Tools</div>
+          ${tools.map(([name, c]) => `<div class="toolbar-row"><span class="tr-name">${escapeHtml(name)}</span><div class="tr-track"><div class="tr-fill" style="width:${(c / toolMax) * 100}%"></div></div><span class="tr-count">${c}</span></div>`).join('') || '<p class="panel-sub">—</p>'}
+          <div class="panel-title" style="margin-top:16px">Most-edited files</div>
+          ${files.map(([f, c]) => `<div class="kv"><span title="${escapeHtml(f)}" class="file-name">${escapeHtml(f.split(/[\\/]/).pop())}</span><span class="muted">${c}</span></div>`).join('') || '<p class="panel-sub">—</p>'}
         </div>
       </div>
-    </div>
+    </details>
+
     ${notesPanel(p)}`;
 
   wireNotes(body, p);
-
+  body.querySelector('.d-open').addEventListener('click', async () => { const r = await window.launcher.openProject(p.path); await handleLaunchResult(r, p.name); });
+  const dr = body.querySelector('.d-resume');
+  if (dr) dr.addEventListener('click', async () => { const r = await window.launcher.resumeSession(p.path, lastId); if (r && r.ok) showStatus('Resuming last session in Claude Code…', 'ok'); else showStatus((r && r.error) || 'Could not resume.', 'warn'); });
+  const df = body.querySelector('.d-folder');
+  if (df) df.addEventListener('click', () => window.launcher.openInExplorer(p.path));
   body.querySelectorAll('.session-row[data-session]').forEach((row) => {
     row.addEventListener('click', () => openTranscript({ cwd: p.path, sessionId: row.dataset.session }, 'detail'));
     const bb = row.querySelector('.s-branch');
@@ -1200,29 +1208,23 @@ function deltaBadge(pct, lastVal) {
 function insightsBlock(ins) {
   if (!ins) return '';
   const w = ins.wow || {};
-  const eff = `
-    <div class="panel">
-      <div class="panel-title">Efficiency <span class="panel-hint">all-time</span></div>
-      <div class="kv"><span>Cache hit rate</span><span title="Share of input tokens served from prompt cache — higher is cheaper."><strong>${Math.round((ins.cacheHit || 0) * 100)}%</strong></span></div>
-      <div class="kv"><span>Cost / turn</span><span title="${COST_TIP}">${fmtCost(ins.costPerTurn)} <span class="est">est.</span></span></div>
-      <div class="kv"><span>Tokens / turn</span><span>${fmtNum(Math.round(ins.tokensPerTurn || 0))}</span></div>
-      ${ins.anyHourly ? `<div class="kv"><span>Busiest</span><span>${DOW[ins.busiestDow]} · ${hourLabel(ins.busiestHour)}</span></div>` : ''}
-    </div>`;
   const trends = `
     <div class="panel">
       <div class="panel-title">Trends <span class="panel-hint">this week vs last</span></div>
-      <div class="kv"><span>Spend this week</span><span title="${COST_TIP}">${fmtCost(w.thisCost || 0)} <span class="est">est.</span> ${deltaBadge(w.costPct, w.lastCost)}</span></div>
       <div class="kv"><span>Time this week</span><span>${fmtDuration(w.thisMs || 0)} ${deltaBadge(w.msPct, w.lastMs)}</span></div>
+      ${ins.anyHourly ? `<div class="kv"><span>Busiest</span><span>${DOW[ins.busiestDow]} · ${hourLabel(ins.busiestHour)}</span></div>` : ''}
+      <div class="kv"><span>Spend this week <span class="est">est.</span></span><span class="muted" title="${COST_TIP}">${fmtCost(w.thisCost || 0)} ${deltaBadge(w.costPct, w.lastCost)}</span></div>
     </div>`;
-  const top = (ins.topByCost && ins.topByCost.length) ? `
+  const list = (ins.topByTime && ins.topByTime.length) ? ins.topByTime : [];
+  const top = list.length ? `
     <div class="panel">
-      <div class="panel-title">Top sessions <span class="panel-hint">most expensive · all-time</span></div>
-      ${ins.topByCost.map((s) => `<div class="kv lead-row" data-path="${escapeHtml(s.path)}" data-session="${escapeHtml(s.sessionId)}">
+      <div class="panel-title">Longest sessions <span class="panel-hint">all-time · click to read</span></div>
+      ${list.map((s) => `<div class="kv lead-row" data-path="${escapeHtml(s.path)}" data-session="${escapeHtml(s.sessionId)}">
           <span class="lead-name">${escapeHtml(s.title || s.name)} <span class="s-open">read ›</span></span>
-          <span class="muted" title="${COST_TIP}">${fmtCost(s.cost)} · ${fmtDuration(s.activeMs)}</span>
+          <span class="muted">${fmtDuration(s.activeMs)}</span>
         </div>`).join('')}
     </div>` : '';
-  return `<div class="detail-grid">${eff}${trends}</div>${top}`;
+  return `<div class="detail-grid">${trends}${top}</div>`;
 }
 
 // Overview = glanceable dashboard (fixed last-7-days): KPIs, recap, budget, heatmap.
@@ -1237,9 +1239,9 @@ async function loadOverview() {
   body.innerHTML = `
     <div class="kpis">
       <div class="kpi"><div class="kpi-val">${fmtDuration(t.activeMs)}</div><div class="kpi-lbl">Time · 7 days</div></div>
-      <div class="kpi" title="${COST_TIP}"><div class="kpi-val">${fmtCost(t.cost)}</div><div class="kpi-lbl">Cost · 7 days <span class="est">est.</span></div></div>
       <div class="kpi"><div class="kpi-val">${fmtNum(t.sessions)}</div><div class="kpi-lbl">Sessions</div></div>
       <div class="kpi"><div class="kpi-val">${fmtNum(t.projects)}</div><div class="kpi-lbl">Projects active</div></div>
+      <div class="kpi quiet" title="${COST_TIP}"><div class="kpi-val">${fmtCost(t.cost)}</div><div class="kpi-lbl">Cost · 7d <span class="est">est.</span></div></div>
     </div>
     <div class="panel recap-panel">
       <div class="panel-title">Recap
@@ -1299,9 +1301,9 @@ async function loadAnalytics(days) {
   body.innerHTML = `
     <div class="kpis">
       <div class="kpi"><div class="kpi-val">${fmtDuration(t.activeMs)}</div><div class="kpi-lbl">Time · ${rangeWord}</div></div>
-      <div class="kpi" title="${COST_TIP}"><div class="kpi-val">${fmtCost(t.cost)}</div><div class="kpi-lbl">Cost · ${rangeWord} <span class="est">est.</span></div></div>
       <div class="kpi"><div class="kpi-val">${fmtNum(t.sessions)}</div><div class="kpi-lbl">Sessions</div></div>
       <div class="kpi"><div class="kpi-val">${fmtNum(t.turns)}</div><div class="kpi-lbl">Turns</div></div>
+      <div class="kpi quiet" title="${COST_TIP}"><div class="kpi-val">${fmtCost(t.cost)}</div><div class="kpi-lbl">Cost <span class="est">est.</span></div></div>
     </div>
     ${analyticsChartPanel(r)}
     <div class="panel">
