@@ -222,6 +222,33 @@ html, body {
 .proj-row:hover .open { opacity: 1; }
 .proj-row .icon-btn { width: 30px; min-height: 28px; flex-shrink: 0; }
 
+/* ---- launcher home: ambient line + resume list ---- */
+.ambient { display: flex; align-items: center; gap: 10px; padding: 8px 14px; margin-bottom: 14px;
+  border: 1px solid var(--clay-soft); background: rgba(217,119,87,0.06); border-radius: 9px; font-size: 13px; color: var(--ink-2); }
+.amb-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); flex-shrink: 0; animation: pulse 1.6s infinite; }
+.amb-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.amb-text strong { color: var(--ink); }
+.amb-name { font-weight: 600; color: var(--ink); }
+
+.resume-list { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--paper); }
+.rrow { display: flex; align-items: center; gap: 12px; padding: 11px 14px; border-bottom: 1px solid var(--line); cursor: pointer; outline: none; transition: background 0.1s; }
+.rrow:last-child { border-bottom: none; }
+.rrow:hover, .rrow.sel { background: var(--cloud); }
+.rrow.sel { box-shadow: inset 3px 0 0 var(--clay); }
+.rrow .active-dot { margin: 0; }
+.rr-main { flex: 1; min-width: 0; }
+.rr-top { display: flex; align-items: center; gap: 9px; }
+.rr-name { font-weight: 650; font-size: 14px; color: var(--ink); flex-shrink: 0; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rr-when { font-size: 11.5px; color: var(--muted); }
+.rr-sum { font-size: 12px; color: var(--muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rr-sum:empty { display: none; }
+.rrow .pin-btn { opacity: 0; flex-shrink: 0; }
+.rrow:hover .pin-btn, .rrow .pin-btn.pinned { opacity: 1; }
+.rrow .open { opacity: 0; flex-shrink: 0; }
+.rrow:hover .open, .rrow.sel .open { opacity: 1; }
+.rrow .more { width: 30px; min-height: 28px; flex-shrink: 0; }
+.recap-home { margin-top: 18px; }
+
 .empty { color: var(--muted); text-align: center; margin-top: 56px; font-size: 14px; }
 
 /* ---------- Banner ---------- */
@@ -760,6 +787,9 @@ body.redact .routine-output,
 body.redact .t-text,
 body.redact .t-result,
 body.redact .kv .file-name,
+body.redact .rr-name,
+body.redact .rr-sum,
+body.redact .amb-name,
 body.redact .lead-name,
 body.redact .proj-notes,
 body.redact .mcp-name,

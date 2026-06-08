@@ -28,17 +28,11 @@
         <button class="nav-item" data-view="search">
           <span class="ico" data-ico="search"></span> Search
         </button>
-        <button class="nav-item" data-view="overview">
-          <span class="ico" data-ico="gauge"></span> Overview
-        </button>
         <button class="nav-item" data-view="analytics">
           <span class="ico" data-ico="chart"></span> Analytics
         </button>
         <button class="nav-item" data-view="context">
           <span class="ico" data-ico="brain"></span> Context
-        </button>
-        <button class="nav-item" data-view="routines">
-          <span class="ico" data-ico="repeat"></span> Routines
         </button>
         <button class="nav-item" data-view="settings">
           <span class="ico" data-ico="gear"></span> Settings
@@ -77,33 +71,23 @@
           <div id="indexBanner" class="banner hidden">Indexing your Claude history…</div>
           <div id="status" class="banner hidden"></div>
 
-          <div id="activePanel" class="active-panel hidden"></div>
+          <div id="ambient" class="ambient hidden"></div>
 
-          <div id="pinnedWrap" class="hidden">
-            <div class="section-head"><span class="ico" data-ico="star"></span> Pinned</div>
-            <div id="pinnedGrid" class="grid"></div>
-          </div>
-
-          <div id="recentWrap" class="hidden">
-            <div class="section-head"><span class="ico" data-ico="gauge"></span> <span id="recentHead">Recent</span></div>
-            <div id="recentGrid" class="grid"></div>
+          <div id="resumeWrap" class="hidden">
+            <div id="resumeList" class="resume-list"></div>
           </div>
 
           <p id="empty" class="empty hidden"></p>
-
-          <div id="allWrap" class="hidden">
-            <div class="section-head"><span class="ico" data-ico="grid"></span> All projects <span id="allCount" class="count"></span></div>
-            <div id="allList" class="proj-list"></div>
-          </div>
 
           <div id="externalWrap" class="hidden">
             <div class="section-head">
               <span class="ico" data-ico="layers"></span> Other Claude projects
               <span id="externalCount" class="count"></span>
             </div>
-            <p class="section-note">Projects with Claude activity that live outside your projects folder (e.g. sessions you ran from home).</p>
-            <div id="externalGrid" class="proj-list"></div>
+            <div id="externalGrid" class="resume-list"></div>
           </div>
+
+          <div id="recapHome" class="recap-home hidden"></div>
         </div>
       </section>
 

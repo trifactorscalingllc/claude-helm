@@ -210,6 +210,9 @@ function popupMenu(anchor, items) {
 async function openCardMenu(anchor, p) {
   const launch = async (model) => { const r = await window.launcher.openProject(p.path, model ? { model } : undefined); await handleLaunchResult(r, p.name); };
   const items = [
+    { label: 'View stats & sessions', icon: 'chart', onClick: () => openDetail(p) },
+    { label: 'Open folder', icon: 'folder', onClick: () => window.launcher.openInExplorer(p.path) },
+    { sep: true },
     { label: 'Open with Opus', icon: 'bolt', onClick: () => launch('opus') },
     { label: 'Open with Sonnet', icon: 'bolt', onClick: () => launch('sonnet') },
     { label: 'Open with Haiku', icon: 'bolt', onClick: () => launch('haiku') },
@@ -224,62 +227,50 @@ async function openCardMenu(anchor, p) {
   popupMenu(anchor, items);
 }
 
-// ---------- card (calm, launch-focused) ----------
-// Identity + recency + one-click launch. Heavy stats (cost, files, size,
-// sessions, charts) live in the detail view, not crammed onto the home card.
-function metaInner(p, compact) {
-  const sz = compact ? 11 : 12;
-  return `
-    <span class="cm-active" data-slot="active">—</span>
-    <span class="cm-time" data-slot="time-wrap" hidden>· <span data-slot="time"></span> spent</span>
-    ${p.isGit ? `<span class="tag git cm-git" data-slot="git">${svg('branch', sz)} <span class="sl">git</span></span>` : ''}
-    ${p.tag ? `<span class="tag tagchip">${escapeHtml(p.tag)}</span>` : ''}
-    ${p.external ? `<span class="tag ext" title="${escapeHtml(p.path)}">outside folder</span>` : ''}`;
+// ---------- resume row (the launcher) ----------
+// Home is one keyboard-first list ranked by likelihood-to-resume. A row is the
+// product: name · what you were last doing · when · branch — Enter/click = Open.
+async function openRow(p) {
+  const res = await window.launcher.openProject(p.path);
+  await handleLaunchResult(res, p.name);
 }
-function wireProjectEl(el, p) {
-  el.addEventListener('click', (e) => { if (!e.target.closest('button')) openDetail(p); });
-  el.querySelector('.open').addEventListener('click', async (e) => {
-    e.stopPropagation();
-    const res = await window.launcher.openProject(p.path);
-    await handleLaunchResult(res, p.name);
-  });
-  el.querySelector('.more').addEventListener('click', (e) => { e.stopPropagation(); openCardMenu(e.currentTarget, p); });
-  const pin = el.querySelector('.pin-btn');
-  if (pin) pin.addEventListener('click', async (e) => { e.stopPropagation(); cfg.pinned = await window.launcher.togglePin(p.path); render(); });
-  loadMetrics(el, p);
-  if (p.isGit) loadGit(el, p);
-}
-function makeCard(p) {
+function makeResumeRow(p) {
   const el = document.createElement('div');
-  el.className = 'card' + (p.archived ? ' archived' : '');
+  el.className = 'rrow' + (p.archived ? ' archived' : '');
+  el.tabIndex = -1;
   const pinned = cfg.pinned.includes(p.path);
   el.innerHTML = `
-    <div class="card-top">
-      <div class="card-name" title="${escapeHtml(p.path)}"><span class="active-dot hidden" data-slot="active-dot" title="Active in Claude now">●</span>${escapeHtml(p.name)}</div>
-      <button class="pin-btn ${pinned ? 'pinned' : ''}" title="${pinned ? 'Unpin' : 'Pin'}">${pinned ? fillSvg('star', 17) : svg('star', 17)}</button>
+    <span class="active-dot hidden" data-slot="active-dot" title="Active in Claude now">●</span>
+    <div class="rr-main">
+      <div class="rr-top">
+        <span class="rr-name" title="${escapeHtml(p.path)}">${escapeHtml(p.name)}</span>
+        <span class="rr-when" data-slot="active">—</span>
+        ${p.isGit ? `<span class="tag git rr-git" data-slot="git">${svg('branch', 11)} <span class="sl">git</span></span>` : ''}
+        ${p.tag ? `<span class="tag tagchip">${escapeHtml(p.tag)}</span>` : ''}
+        ${p.external ? `<span class="tag ext">outside folder</span>` : ''}
+      </div>
+      <div class="rr-sum" data-slot="summary"></div>
     </div>
-    <div class="card-summary" data-slot="summary"></div>
-    <div class="card-meta">${metaInner(p, false)}</div>
-    <div class="card-actions">
-      <button class="btn primary open">${svg('terminal', 15)} Open in Claude</button>
-      <button class="icon-btn more" title="More actions">${svg('dots', 17)}</button>
-    </div>`;
-  wireProjectEl(el, p);
-  loadSummary(el, p);
+    <button class="pin-btn ${pinned ? 'pinned' : ''}" title="${pinned ? 'Unpin' : 'Pin'}">${pinned ? fillSvg('star', 15) : svg('star', 15)}</button>
+    <button class="btn primary btn-xs open">${svg('terminal', 14)} Open</button>
+    <button class="icon-btn more" title="Details &amp; actions">${svg('dots', 16)}</button>`;
+  el.addEventListener('click', (e) => { if (!e.target.closest('button')) openRow(p); });
+  el.querySelector('.open').addEventListener('click', (e) => { e.stopPropagation(); openRow(p); });
+  el.querySelector('.more').addEventListener('click', (e) => { e.stopPropagation(); openCardMenu(e.currentTarget, p); });
+  el.querySelector('.pin-btn').addEventListener('click', async (e) => { e.stopPropagation(); cfg.pinned = await window.launcher.togglePin(p.path); render(); });
+  loadMetrics(el, p);
+  loadResumeSummary(el, p);
+  if (p.isGit) loadGit(el, p);
   return el;
 }
-// compact row for the long tail of projects
-function makeRow(p) {
-  const el = document.createElement('div');
-  el.className = 'proj-row' + (p.archived ? ' archived' : '');
-  el.innerHTML = `
-    <span class="active-dot hidden" data-slot="active-dot" title="Active in Claude now">●</span>
-    <span class="pr-name" title="${escapeHtml(p.path)}">${escapeHtml(p.name)}</span>
-    <span class="pr-meta">${metaInner(p, true)}</span>
-    <button class="btn ghost btn-xs open">Open</button>
-    <button class="icon-btn more" title="More actions">${svg('dots', 16)}</button>`;
-  wireProjectEl(el, p);
-  return el;
+// the "what you were doing" line — prefer the last session title over a generic desc
+async function loadResumeSummary(el, p) {
+  const s = await window.launcher.projectSummary(p.path);
+  if (!el.isConnected) return;
+  const node = el.querySelector('[data-slot="summary"]');
+  if (!node) return;
+  const text = s.lastTitle || s.desc || s.commit || '';
+  if (text) node.textContent = text; else node.remove();
 }
 
 async function loadGit(el, p) {
@@ -353,40 +344,24 @@ function matches(p) {
   return true;
 }
 
-const RECENT_N = 6; // most-recent projects shown as full cards; the rest are compact rows
 function render() {
   const list = projects.filter(matches);
-  const pinnedList = list.filter((p) => cfg.pinned.includes(p.path));
-  const nonPinned = list.filter((p) => !cfg.pinned.includes(p.path)).sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
-  const recent = nonPinned.slice(0, RECENT_N);
-  const more = nonPinned.slice(RECENT_N);
+  // rank by likelihood-to-resume: pinned first, then most-recently-touched
+  const ranked = [...list].sort((a, b) => {
+    const pa = cfg.pinned.includes(a.path) ? 1 : 0, pb = cfg.pinned.includes(b.path) ? 1 : 0;
+    if (pa !== pb) return pb - pa;
+    return (b.mtime || 0) - (a.mtime || 0);
+  });
 
   cardEls.clear();
-  const addTo = (parent, p, asRow) => { const el = asRow ? makeRow(p) : makeCard(p); cardEls.set(p.path, el); parent.appendChild(el); };
-
-  // Pinned (cards)
-  const pinnedGrid = $('pinnedGrid');
-  pinnedGrid.innerHTML = '';
-  $('pinnedWrap').classList.toggle('hidden', !pinnedList.length);
-  pinnedList.forEach((p) => addTo(pinnedGrid, p, false));
-
-  // Recent (cards)
-  const recentGrid = $('recentGrid');
-  recentGrid.innerHTML = '';
-  $('recentWrap').classList.toggle('hidden', !recent.length);
-  $('recentHead').textContent = (more.length || pinnedList.length) ? 'Recent' : 'Projects';
-  recent.forEach((p) => addTo(recentGrid, p, false));
-
-  // All others (compact rows)
-  const allList = $('allList');
-  allList.innerHTML = '';
-  $('allWrap').classList.toggle('hidden', !more.length);
-  $('allCount').textContent = more.length;
-  more.forEach((p) => addTo(allList, p, true));
+  const resumeList = $('resumeList');
+  resumeList.innerHTML = '';
+  $('resumeWrap').classList.toggle('hidden', !ranked.length);
+  ranked.forEach((p) => { const el = makeResumeRow(p); cardEls.set(p.path, el); resumeList.appendChild(el); });
 
   const empty = $('empty');
   if (rootError) {
-    empty.classList.remove('hidden'); // keep the actionable folder message set by loadProjects
+    empty.classList.remove('hidden'); // actionable folder message set by loadProjects
   } else if (!list.length) {
     if (filter) {
       empty.textContent = `No projects match "${filter}".`;
@@ -395,12 +370,12 @@ function render() {
       empty.innerHTML = `<div class="welcome">
           <div class="welcome-mark">${svg('sun', 30)}</div>
           <h3>Welcome to Claude Helm</h3>
-          <p>This is your projects folder — every subfolder here shows up as a card you can open in Claude Code with one click.<br><code>${escapeHtml(cfg.root)}</code></p>
+          <p>This is your projects folder — every subfolder shows up here, and one click (or Enter) opens it in Claude Code.<br><code>${escapeHtml(cfg.root)}</code></p>
           <div class="welcome-actions">
             <button class="btn primary" id="emptyNew">${svg('plus', 14)} New project</button>
             <button class="btn ghost" id="emptyPick">Choose a different folder</button>
           </div>
-          ${hasOther ? `<p class="welcome-hint">${svg('layers', 13)} Found ${externalProjects.length} project${externalProjects.length === 1 ? '' : 's'} from your existing Claude history below.</p>` : `<p class="welcome-hint">No Claude history yet — open a project and your time, cost, and activity will start showing up here.</p>`}
+          ${hasOther ? `<p class="welcome-hint">${svg('layers', 13)} Found ${externalProjects.length} project${externalProjects.length === 1 ? '' : 's'} from your existing Claude history below.</p>` : `<p class="welcome-hint">No Claude history yet — open a project and your activity starts showing up here.</p>`}
         </div>`;
       const n = document.getElementById('emptyNew');
       if (n) n.addEventListener('click', openModal);
@@ -412,13 +387,57 @@ function render() {
     empty.classList.add('hidden');
   }
 
-  // external (other Claude) projects — compact rows
-  const extList = externalProjects.filter(matches);
+  // external (other Claude) projects — same rows
+  const extList = externalProjects.filter(matches).sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
   const extGrid = $('externalGrid');
   extGrid.innerHTML = '';
   $('externalWrap').classList.toggle('hidden', !extList.length);
   $('externalCount').textContent = extList.length;
-  extList.forEach((p) => addTo(extGrid, p, true));
+  extList.forEach((p) => { const el = makeResumeRow(p); cardEls.set(p.path, el); extGrid.appendChild(el); });
+
+  renderHomeRecap();
+}
+
+// Recap moved here from the (deleted) Overview tab — a quiet "what you did" panel
+// below the resume list, not competing with the launcher.
+function renderHomeRecap() {
+  const host = $('recapHome');
+  if (!host) return;
+  if (rootError || !projects.length) { host.classList.add('hidden'); host.innerHTML = ''; return; }
+  host.classList.remove('hidden');
+  host.innerHTML = `<div class="panel recap-panel">
+      <div class="panel-title">Recap
+        <div class="seg recap-range">
+          <button data-range="today" class="${recapRange === 'today' ? 'active' : ''}">Today</button>
+          <button data-range="week" class="${recapRange === 'week' ? 'active' : ''}">This week</button>
+        </div>
+        <button class="btn ghost btn-xs recap-refresh" title="Regenerate recap">${svg('repeat', 14)}</button>
+      </div>
+      <div id="recap-body"><p class="panel-sub">Loading activity…</p></div>
+    </div>`;
+  const rr = host.querySelector('.recap-refresh');
+  if (rr) rr.addEventListener('click', () => loadRecap(true));
+  host.querySelectorAll('.recap-range button').forEach((b) => b.addEventListener('click', () => {
+    recapRange = b.dataset.range;
+    host.querySelectorAll('.recap-range button').forEach((x) => x.classList.toggle('active', x === b));
+    loadRecap(false);
+  }));
+  loadRecap(false);
+}
+
+// Keyboard-first resume list: ↑/↓ select a project, Enter opens it in Claude.
+function moveResumeSel(dir) {
+  const rows = [...document.querySelectorAll('#resumeList .rrow, #externalGrid .rrow')];
+  if (!rows.length) return;
+  let i = rows.findIndex((r) => r.classList.contains('sel'));
+  i = (i < 0) ? (dir > 0 ? 0 : rows.length - 1) : (i + dir + rows.length) % rows.length;
+  rows.forEach((r) => r.classList.remove('sel'));
+  rows[i].classList.add('sel');
+  rows[i].scrollIntoView({ block: 'nearest' });
+}
+function openResumeSel() {
+  const sel = document.querySelector('#resumeList .rrow.sel, #externalGrid .rrow.sel');
+  if (sel) sel.click();
 }
 
 async function loadProjects() {
@@ -551,10 +570,8 @@ function switchView(view) {
     if (el) el.classList.toggle('hidden', view !== v);
   });
   if (view === 'settings') syncSettingsUI();
-  if (view === 'overview') loadOverview();
   if (view === 'analytics') loadAnalytics();
   if (view === 'context') loadContext();
-  if (view === 'routines') loadRoutines();
   if (view === 'search') loadSearch();
 }
 
@@ -959,11 +976,9 @@ async function openDetail(p) {
     </div>
 
     <div class="kpis usage-kpis">
+      <div class="kpi"><div class="kpi-val">${relTime(t.lastTs)}</div><div class="kpi-lbl">Last active</div></div>
       <div class="kpi"><div class="kpi-val">${fmtDuration(t.activeMs)}</div><div class="kpi-lbl">Time spent</div></div>
-      <div class="kpi"><div class="kpi-val">${fmtTokens(totalTokens)}</div><div class="kpi-lbl">Tokens</div></div>
       <div class="kpi"><div class="kpi-val">${fmtNum(t.sessions)}</div><div class="kpi-lbl">Sessions</div></div>
-      <div class="kpi"><div class="kpi-val">${fmtNum(t.turns)}</div><div class="kpi-lbl">Turns</div></div>
-      <div class="kpi quiet" title="${COST_TIP}"><div class="kpi-val">${fmtCost(t.cost)}</div><div class="kpi-lbl">Cost <span class="est">est.</span></div></div>
     </div>
 
     <div class="panel">
@@ -1330,7 +1345,7 @@ async function loadAnalytics(days) {
     <div class="kpis">
       <div class="kpi"><div class="kpi-val">${fmtDuration(t.activeMs)}</div><div class="kpi-lbl">Time · ${rangeWord}</div></div>
       <div class="kpi"><div class="kpi-val">${fmtNum(t.sessions)}</div><div class="kpi-lbl">Sessions</div></div>
-      <div class="kpi"><div class="kpi-val">${fmtNum(t.turns)}</div><div class="kpi-lbl">Turns</div></div>
+      <div class="kpi"><div class="kpi-val">${fmtNum(t.projects)}</div><div class="kpi-lbl">Projects</div></div>
       <div class="kpi quiet" title="${COST_TIP}"><div class="kpi-val">${fmtCost(t.cost)}</div><div class="kpi-lbl">Cost <span class="est">est.</span></div></div>
     </div>
     ${analyticsChartPanel(r)}
@@ -1646,6 +1661,15 @@ async function init() {
       e.preventDefault();
       paletteOpen() ? closePalette() : openPalette();
     }
+    // keyboard-first resume list (only on the projects home, not while typing/in palette)
+    const onHome = !$('view-projects').classList.contains('hidden') && !paletteOpen();
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target.tagName || ''));
+    if (onHome && !typing && !e.ctrlKey && !e.metaKey) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); moveResumeSel(1); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); moveResumeSel(-1); }
+      else if (e.key === 'Enter') { e.preventDefault(); openResumeSel(); }
+      else if (e.key === '/') { e.preventDefault(); $('search').focus(); }
+    }
   });
 
   // command palette interactions
@@ -1885,72 +1909,24 @@ function lastUsage(bars) {
 }
 
 // Poll the active sessions on a fixed cadence so the usage bars are truly live.
+// Monitoring shrinks to ONE ambient line: how many sessions are live + the most
+// active one's project & active (working) time. No hero, no bar graph.
 async function sampleActiveUsage() {
-  const panel = $('activePanel');
-  if (!panel) return;
+  const el = $('ambient');
+  if (!el) return;
   const list = await window.launcher.activeSessions();
-  if (!list || !list.length) {
-    panel.classList.add('hidden'); panel.innerHTML = '';
-    activeCards.clear(); sessionBars.clear(); sessionLast.clear(); sessionModels.clear();
-    return;
-  }
-  panel.classList.remove('hidden');
-  const ids = new Set(list.map((a) => a.sessionId));
-  for (const [id, el] of activeCards) { // drop sessions that went idle
-    if (!ids.has(id)) { el.remove(); activeCards.delete(id); sessionBars.delete(id); sessionLast.delete(id); sessionModels.delete(id); }
-  }
-  list.forEach((a) => {
-    recordBar(a);
-    if (activeCards.has(a.sessionId)) updateActiveCard(a);
-    else { const el = buildActiveCard(a); activeCards.set(a.sessionId, el); panel.appendChild(el); }
-  });
-  panel.classList.toggle('multi', list.length > 1);
-  if (!activeClockTimer) activeClockTimer = setInterval(tickActivePanels, 1000);
-}
-function buildActiveCard(a) {
-  const el = document.createElement('div');
-  el.className = 'active-card';
-  el.dataset.session = a.sessionId;
-  const first = a.firstTs || a.lastTs;
-  const bars = sessionBars.get(a.sessionId);
+  if (!list || !list.length) { el.classList.add('hidden'); el.innerHTML = ''; return; }
+  el.classList.remove('hidden');
+  const lead = list.slice().sort((a, b) => b.activeMs - a.activeMs)[0];
+  const others = list.length - 1;
   el.innerHTML = `
-    <div class="ap-head"><span class="ap-dot"></span> ACTIVE NOW <span class="ap-models">${modelChips(a.sessionId)}</span></div>
-    <div class="ap-name">${escapeHtml(a.name)}</div>
-    <div class="ap-stats">
-      <span class="ap-clock" data-first="${first}" title="How long this session has been running">${fmtClock(Date.now() - first)}</span>
-      <span class="ap-tokens">${fmtNum(a.tokens)} tokens</span>
-      <span class="ap-cost" title="${COST_TIP}">${fmtCost(a.cost)} <span class="est">est.</span></span>
-    </div>
-    <div class="ap-graph"><div class="ap-graph-inner">${usageBarsSvg(bars)}</div></div>
-    <div class="ap-legend">
-      <span class="ap-leg"><span class="ap-sw bar"></span>token usage / live</span>
-      <span class="ap-leg">now <b class="ap-leg-now">${fmtNum(lastUsage(bars))}</b></span>
-      <span class="ap-leg">peak <b class="ap-leg-peak">${fmtNum(peakUsage(bars))}</b></span>
-      <span class="ap-leg-x">last ~2 min</span>
-    </div>
-    <div class="ap-actions">
-      <button class="btn primary ap-open">${svg('terminal', 15)} Open</button>
-      <button class="btn ghost ap-view">${svg('message', 15)} View session</button>
-    </div>`;
-  el.querySelector('.ap-open').addEventListener('click', async () => { const r = await window.launcher.openProject(a.path); handleLaunchResult(r, a.name); });
-  el.querySelector('.ap-view').addEventListener('click', () => openTranscript({ cwd: a.path, sessionId: a.sessionId }, 'projects'));
-  return el;
-}
-function updateActiveCard(a) {
-  const el = activeCards.get(a.sessionId); if (!el) return;
-  const bars = sessionBars.get(a.sessionId);
-  const set = (sel, html) => { const n = el.querySelector(sel); if (n) n.innerHTML = html; };
-  set('.ap-tokens', `${fmtNum(a.tokens)} tokens`);
-  set('.ap-cost', `${fmtCost(a.cost)} <span class="est">est.</span>`);
-  set('.ap-models', modelChips(a.sessionId));
-  set('.ap-leg-now', fmtNum(lastUsage(bars)));
-  set('.ap-leg-peak', fmtNum(peakUsage(bars)));
-  const g = el.querySelector('.ap-graph-inner'); if (g) g.innerHTML = usageBarsSvg(bars);
-}
-function tickActivePanels() {
-  document.querySelectorAll('#activePanel .ap-clock').forEach((clk) => {
-    clk.textContent = fmtClock(Date.now() - Number(clk.dataset.first));
-  });
+    <span class="amb-dot"></span>
+    <span class="amb-text"><strong>${list.length} session${list.length === 1 ? '' : 's'} live</strong> · <span class="amb-name">${escapeHtml(lead.name)}</span> · ${fmtDuration(lead.activeMs)} active${others > 0 ? ` · +${others} more` : ''}</span>
+    <button class="btn ghost btn-xs amb-open">${svg('terminal', 13)} Open</button>
+    <button class="btn ghost btn-xs amb-view">${svg('message', 13)} View</button>`;
+  el.querySelector('.amb-open').addEventListener('click', () => openRow(lead));
+  el.querySelector('.amb-view').addEventListener('click', () => openTranscript({ cwd: lead.path, sessionId: lead.sessionId }, 'projects'));
+  refreshLiveMetrics(); // keep the live rows' dot + last-active current
 }
 
 init();
