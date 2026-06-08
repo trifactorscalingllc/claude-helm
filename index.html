@@ -84,12 +84,17 @@
             <div id="pinnedGrid" class="grid"></div>
           </div>
 
-          <div class="section-head">
-            <span class="ico" data-ico="grid"></span> All projects
-            <span id="allCount" class="count"></span>
+          <div id="recentWrap" class="hidden">
+            <div class="section-head"><span class="ico" data-ico="gauge"></span> <span id="recentHead">Recent</span></div>
+            <div id="recentGrid" class="grid"></div>
           </div>
-          <div id="grid" class="grid"></div>
+
           <p id="empty" class="empty hidden"></p>
+
+          <div id="allWrap" class="hidden">
+            <div class="section-head"><span class="ico" data-ico="grid"></span> All projects <span id="allCount" class="count"></span></div>
+            <div id="allList" class="proj-list"></div>
+          </div>
 
           <div id="externalWrap" class="hidden">
             <div class="section-head">
@@ -97,7 +102,7 @@
               <span id="externalCount" class="count"></span>
             </div>
             <p class="section-note">Projects with Claude activity that live outside your projects folder (e.g. sessions you ran from home).</p>
-            <div id="externalGrid" class="grid"></div>
+            <div id="externalGrid" class="proj-list"></div>
           </div>
         </div>
       </section>

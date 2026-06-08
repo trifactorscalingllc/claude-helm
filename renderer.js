@@ -216,73 +216,61 @@ async function openCardMenu(anchor, p) {
   popupMenu(anchor, items);
 }
 
-// ---------- card ----------
-function makeCard(p) {
-  const el = document.createElement('div');
-  el.className = 'card' + (p.archived ? ' archived' : '');
-  const pinned = cfg.pinned.includes(p.path);
-
-  el.innerHTML = `
-    <div class="card-top">
-      <div class="card-meta">
-        <div class="card-name" title="${p.path}">${p.name} <span class="active-dot hidden" data-slot="active-dot" title="Active in Claude now">●</span></div>
-        <div class="card-tags">
-          ${p.tag ? `<span class="tag tagchip">${svg('tag', 12)} ${escapeHtml(p.tag)}</span>` : ''}
-          ${p.isGit && !p.external ? `<span class="tag git" data-slot="git">${svg('branch', 12)} <span class="sl">git…</span></span>` : (p.isGit ? `<span class="tag git">${svg('branch', 12)} git</span>` : '')}
-          <span class="tag">${svg('clock', 13)} ${relTime(p.mtime)}</span>
-          ${p.external ? `<span class="tag ext" title="${p.path}">${svg('layers', 13)} outside folder</span>` : ''}
-        </div>
-      </div>
-      <button class="pin-btn ${pinned ? 'pinned' : ''}" title="${pinned ? 'Unpin' : 'Pin'}">
-        ${pinned ? fillSvg('star', 18) : svg('star', 18)}
-      </button>
-    </div>
-    <div class="card-summary" data-slot="summary"></div>
-    <div class="metrics-row" data-slot="metrics">
-      <div class="metric"><div class="m-ico">${svg('clock', 15)}</div><div><div class="m-val" data-slot="time">·</div><div class="m-lbl">time</div></div></div>
-      <div class="metric" title="${COST_TIP}"><div class="m-ico">${svg('coin', 15)}</div><div><div class="m-val" data-slot="cost">·</div><div class="m-lbl">cost <span class="est">est.</span></div></div></div>
-      <div class="spark-wrap" data-slot="spark"></div>
-    </div>
-    <div class="stats">
-      <div class="stat loading" data-slot="files">${svg('file', 14)} <span class="sl">counting…</span></div>
-      <div class="stat loading" data-slot="size">${svg('drive', 14)} <span class="sl">sizing…</span></div>
-      <div class="stat loading" data-slot="sessions">${svg('message', 14)} <span class="sl">sessions…</span></div>
-      <div class="stat loading" data-slot="active">${svg('clock', 14)} <span class="sl">activity…</span></div>
-    </div>
-    <div class="card-actions">
-      <button class="btn primary open">${svg('terminal', 16)} Open in Claude</button>
-      <button class="icon-btn details" title="View project stats">${svg('chart', 17)}</button>
-      <button class="icon-btn folder" title="Open folder in Explorer">${svg('folder', 17)}</button>
-      <button class="icon-btn more" title="More actions">${svg('dots', 17)}</button>
-    </div>`;
-
+// ---------- card (calm, launch-focused) ----------
+// Identity + recency + one-click launch. Heavy stats (cost, files, size,
+// sessions, charts) live in the detail view, not crammed onto the home card.
+function metaInner(p, compact) {
+  const sz = compact ? 11 : 12;
+  return `
+    <span class="cm-active" data-slot="active">—</span>
+    <span class="cm-time" data-slot="time-wrap" hidden>· <span data-slot="time"></span> spent</span>
+    ${p.isGit ? `<span class="tag git cm-git" data-slot="git">${svg('branch', sz)} <span class="sl">git</span></span>` : ''}
+    ${p.tag ? `<span class="tag tagchip">${escapeHtml(p.tag)}</span>` : ''}
+    ${p.external ? `<span class="tag ext" title="${escapeHtml(p.path)}">outside folder</span>` : ''}`;
+}
+function wireProjectEl(el, p) {
+  el.addEventListener('click', (e) => { if (!e.target.closest('button')) openDetail(p); });
   el.querySelector('.open').addEventListener('click', async (e) => {
     e.stopPropagation();
     const res = await window.launcher.openProject(p.path);
     await handleLaunchResult(res, p.name);
   });
-  el.querySelector('.folder').addEventListener('click', (e) => { e.stopPropagation(); window.launcher.openInExplorer(p.path); });
-  el.querySelector('.details').addEventListener('click', (e) => { e.stopPropagation(); openDetail(p); });
   el.querySelector('.more').addEventListener('click', (e) => { e.stopPropagation(); openCardMenu(e.currentTarget, p); });
-  el.querySelector('.pin-btn').addEventListener('click', async (e) => {
-    e.stopPropagation();
-    cfg.pinned = await window.launcher.togglePin(p.path);
-    render();
-  });
-  el.querySelector('.metrics-row').addEventListener('click', () => openDetail(p));
-
-  if (p.external) {
-    // don't walk huge external trees (e.g. home dir) — show Claude metrics only
-    const fNode = el.querySelector('[data-slot="files"]');
-    if (fNode) fNode.outerHTML = `<div class="stat" data-slot="files">${svg('file', 14)} <span class="sl">—</span></div>`;
-    const szNode = el.querySelector('[data-slot="size"]');
-    if (szNode) szNode.outerHTML = `<div class="stat" data-slot="size">${svg('drive', 14)} <span class="sl">—</span></div>`;
-  } else {
-    loadStats(el, p);
-  }
+  const pin = el.querySelector('.pin-btn');
+  if (pin) pin.addEventListener('click', async (e) => { e.stopPropagation(); cfg.pinned = await window.launcher.togglePin(p.path); render(); });
   loadMetrics(el, p);
+  if (p.isGit) loadGit(el, p);
+}
+function makeCard(p) {
+  const el = document.createElement('div');
+  el.className = 'card' + (p.archived ? ' archived' : '');
+  const pinned = cfg.pinned.includes(p.path);
+  el.innerHTML = `
+    <div class="card-top">
+      <div class="card-name" title="${escapeHtml(p.path)}"><span class="active-dot hidden" data-slot="active-dot" title="Active in Claude now">●</span>${escapeHtml(p.name)}</div>
+      <button class="pin-btn ${pinned ? 'pinned' : ''}" title="${pinned ? 'Unpin' : 'Pin'}">${pinned ? fillSvg('star', 17) : svg('star', 17)}</button>
+    </div>
+    <div class="card-summary" data-slot="summary"></div>
+    <div class="card-meta">${metaInner(p, false)}</div>
+    <div class="card-actions">
+      <button class="btn primary open">${svg('terminal', 15)} Open in Claude</button>
+      <button class="icon-btn more" title="More actions">${svg('dots', 17)}</button>
+    </div>`;
+  wireProjectEl(el, p);
   loadSummary(el, p);
-  if (p.isGit && !p.external) loadGit(el, p);
+  return el;
+}
+// compact row for the long tail of projects
+function makeRow(p) {
+  const el = document.createElement('div');
+  el.className = 'proj-row' + (p.archived ? ' archived' : '');
+  el.innerHTML = `
+    <span class="active-dot hidden" data-slot="active-dot" title="Active in Claude now">●</span>
+    <span class="pr-name" title="${escapeHtml(p.path)}">${escapeHtml(p.name)}</span>
+    <span class="pr-meta">${metaInner(p, true)}</span>
+    <button class="btn ghost btn-xs open">Open</button>
+    <button class="icon-btn more" title="More actions">${svg('dots', 16)}</button>`;
+  wireProjectEl(el, p);
   return el;
 }
 
@@ -325,22 +313,16 @@ async function loadSummary(el, p) {
   }
 }
 
+// Update the live, in-place bits of a card/row: last-active, time spent, active dot.
 async function loadMetrics(el, p) {
   const m = await window.launcher.projectMetrics(p.path);
   if (!el.isConnected) return;
-  const setVal = (slot, val) => { const n = el.querySelector(`[data-slot="${slot}"]`); if (n) n.textContent = val; };
-  setVal('time', fmtDuration(m.activeMs));
-  setVal('cost', fmtCost(m.cost));
-  const spark = el.querySelector('[data-slot="spark"]');
-  if (spark) spark.innerHTML = sparkline(m.series, 'activeMs');
-  const dot = el.querySelector('[data-slot="active-dot"]');
-  if (dot) dot.classList.toggle('hidden', !m.active);
+  const set = (slot, val) => { const n = el.querySelector(`[data-slot="${slot}"]`); if (n) n.textContent = val; };
+  set('active', m.lastTs ? relTime(m.lastTs) : 'no Claude activity yet');
+  set('time', fmtDuration(m.activeMs));
+  const tw = el.querySelector('[data-slot="time-wrap"]'); if (tw) tw.hidden = !(m.activeMs > 0);
+  const dot = el.querySelector('[data-slot="active-dot"]'); if (dot) dot.classList.toggle('hidden', !m.active);
   el.classList.toggle('is-active', !!m.active);
-  // sessions + last-active come from metrics too (authoritative)
-  const sNode = el.querySelector('[data-slot="sessions"]');
-  if (sNode) sNode.outerHTML = `<div class="stat" data-slot="sessions">${svg('message', 14)} <span class="sv">${fmtNum(m.sessions)}</span> <span class="sl">${m.sessions === 1 ? 'session' : 'sessions'}</span></div>`;
-  const aNode = el.querySelector('[data-slot="active"]');
-  if (aNode) aNode.outerHTML = `<div class="stat" data-slot="active">${svg('clock', 14)} <span class="sv">${relTime(m.lastTs)}</span> <span class="sl">in Claude</span></div>`;
 }
 
 async function loadStats(el, p) {
@@ -363,29 +345,37 @@ function matches(p) {
   return true;
 }
 
+const RECENT_N = 6; // most-recent projects shown as full cards; the rest are compact rows
 function render() {
   const list = projects.filter(matches);
   const pinnedList = list.filter((p) => cfg.pinned.includes(p.path));
-  const rest = list.filter((p) => !cfg.pinned.includes(p.path));
+  const nonPinned = list.filter((p) => !cfg.pinned.includes(p.path)).sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
+  const recent = nonPinned.slice(0, RECENT_N);
+  const more = nonPinned.slice(RECENT_N);
 
   cardEls.clear();
-  const addCard = (gridEl, p) => { const el = makeCard(p); cardEls.set(p.path, el); gridEl.appendChild(el); };
+  const addTo = (parent, p, asRow) => { const el = asRow ? makeRow(p) : makeCard(p); cardEls.set(p.path, el); parent.appendChild(el); };
 
-  const pinnedWrap = $('pinnedWrap');
+  // Pinned (cards)
   const pinnedGrid = $('pinnedGrid');
   pinnedGrid.innerHTML = '';
-  if (pinnedList.length) {
-    pinnedList.forEach((p) => addCard(pinnedGrid, p));
-    pinnedWrap.classList.remove('hidden');
-  } else {
-    pinnedWrap.classList.add('hidden');
-  }
+  $('pinnedWrap').classList.toggle('hidden', !pinnedList.length);
+  pinnedList.forEach((p) => addTo(pinnedGrid, p, false));
 
-  const grid = $('grid');
-  grid.innerHTML = '';
-  rest.forEach((p) => addCard(grid, p));
+  // Recent (cards)
+  const recentGrid = $('recentGrid');
+  recentGrid.innerHTML = '';
+  $('recentWrap').classList.toggle('hidden', !recent.length);
+  $('recentHead').textContent = (more.length || pinnedList.length) ? 'Recent' : 'Projects';
+  recent.forEach((p) => addTo(recentGrid, p, false));
 
-  $('allCount').textContent = rest.length;
+  // All others (compact rows)
+  const allList = $('allList');
+  allList.innerHTML = '';
+  $('allWrap').classList.toggle('hidden', !more.length);
+  $('allCount').textContent = more.length;
+  more.forEach((p) => addTo(allList, p, true));
+
   const empty = $('empty');
   if (rootError) {
     empty.classList.remove('hidden'); // keep the actionable folder message set by loadProjects
@@ -414,17 +404,13 @@ function render() {
     empty.classList.add('hidden');
   }
 
-  // external (other Claude) projects
+  // external (other Claude) projects — compact rows
   const extList = externalProjects.filter(matches);
   const extGrid = $('externalGrid');
   extGrid.innerHTML = '';
-  if (extList.length) {
-    extList.forEach((p) => addCard(extGrid, p));
-    $('externalCount').textContent = extList.length;
-    $('externalWrap').classList.remove('hidden');
-  } else {
-    $('externalWrap').classList.add('hidden');
-  }
+  $('externalWrap').classList.toggle('hidden', !extList.length);
+  $('externalCount').textContent = extList.length;
+  extList.forEach((p) => addTo(extGrid, p, true));
 }
 
 async function loadProjects() {

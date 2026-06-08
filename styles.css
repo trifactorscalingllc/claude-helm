@@ -154,25 +154,23 @@ html, body {
   background: var(--paper);
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  padding: 16px;
-  display: flex; flex-direction: column; gap: 14px;
+  padding: 15px 16px;
+  display: flex; flex-direction: column; gap: 9px;
   box-shadow: var(--shadow);
-  transition: border-color 0.12s, transform 0.08s;
+  cursor: pointer;
+  transition: border-color 0.12s, transform 0.08s, box-shadow 0.12s;
 }
-.card:hover { border-color: var(--clay); }
+.card:hover { border-color: var(--clay-soft); box-shadow: 0 5px 18px rgba(60,40,30,0.09); }
 
-.card-top { display: flex; align-items: flex-start; gap: 12px; }
-.avatar {
-  width: 42px; height: 42px; border-radius: 10px;
-  background: linear-gradient(145deg, var(--clay-soft), #f6e3d9);
-  color: var(--clay-deep);
-  display: flex; align-items: center; justify-content: center;
-  font-weight: 700; font-size: 15px; flex-shrink: 0;
-  text-transform: uppercase;
+.card-top { display: flex; align-items: center; gap: 10px; }
+.card-name {
+  flex: 1; min-width: 0; font-weight: 650; font-size: 15px; color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  display: flex; align-items: center; gap: 7px;
 }
-.card-meta { flex: 1; min-width: 0; }
-.card-name { font-weight: 600; font-size: 15.5px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.card-tags { display: flex; gap: 6px; margin-top: 5px; flex-wrap: wrap; }
+.card-meta { display: flex; align-items: center; gap: 9px; font-size: 11.5px; color: var(--muted); flex-wrap: wrap; }
+.cm-active { color: var(--ink-2); font-weight: 500; }
+.cm-time { color: var(--muted); }
 .tag {
   font-size: 11px; color: var(--muted);
   display: inline-flex; align-items: center; gap: 4px;
@@ -201,15 +199,28 @@ html, body {
 .stat .sl { color: var(--muted); }
 .stat.loading { color: var(--muted); }
 
-.card-actions { display: flex; gap: 8px; }
+.card-actions { display: flex; gap: 7px; margin-top: 2px; }
 .card-actions .open { flex: 1; justify-content: center; }
 .icon-btn {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 38px; border-radius: 10px; cursor: pointer;
+  width: 38px; min-height: 34px; border-radius: 10px; cursor: pointer;
   background: var(--paper); border: 1px solid var(--line-2); color: var(--ink-2);
   transition: border-color 0.12s, color 0.12s;
 }
 .icon-btn:hover { border-color: var(--clay); color: var(--clay-deep); }
+
+/* compact project rows (the long tail) */
+.proj-list { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--paper); }
+.proj-row { display: flex; align-items: center; gap: 10px; padding: 9px 13px; border-bottom: 1px solid var(--line); cursor: pointer; transition: background 0.1s; }
+.proj-row:last-child { border-bottom: none; }
+.proj-row:hover { background: var(--cloud); }
+.proj-row.is-active { background: rgba(217,119,87,0.06); }
+.proj-row .active-dot { margin: 0; }
+.pr-name { font-weight: 600; font-size: 13.5px; color: var(--ink); flex-shrink: 0; max-width: 230px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-meta { flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px; font-size: 11.5px; color: var(--muted); overflow: hidden; }
+.proj-row .open { opacity: 0; flex-shrink: 0; }
+.proj-row:hover .open { opacity: 1; }
+.proj-row .icon-btn { width: 30px; min-height: 28px; flex-shrink: 0; }
 
 .empty { color: var(--muted); text-align: center; margin-top: 56px; font-size: 14px; }
 
@@ -322,7 +333,7 @@ select:focus { outline: none; border-color: var(--clay); }
 .m-lbl { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
 .spark-wrap { margin-left: auto; display: flex; align-items: flex-end; }
 .spark { display: block; }
-.active-dot { color: var(--good); font-size: 11px; margin-left: 4px; animation: pulse 1.6s infinite; }
+.active-dot { color: var(--good); font-size: 10px; margin: 0; flex-shrink: 0; animation: pulse 1.6s infinite; }
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
 .card.is-active { border-color: var(--good); }
 
