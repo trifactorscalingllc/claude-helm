@@ -366,6 +366,7 @@ class Indexer {
       const bucket = hourly ? (pr.hourly || {}) : (pr.daily || {});
       const series = keys.map((k) => (bucket[k] ? bucket[k].activeMs : 0));
       const costSeries = keys.map((k) => (bucket[k] ? (bucket[k].cost || 0) : 0));
+      const tokenSeries = keys.map((k) => { const b = bucket[k]; return b ? ((b.tokensIn || 0) + (b.tokensOut || 0)) : 0; });
       const totalMs = series.reduce((s, v) => s + v, 0);
       const totalCost = costSeries.reduce((s, v) => s + v, 0);
       let sess = 0, lastTs = 0;
@@ -379,7 +380,7 @@ class Indexer {
       breakdown.push({
         name: cwd.split(/[\\/]/).pop() || cwd, path: cwd,
         activeMs: totalMs, cost: totalCost, sessions: sess, lastTs,
-        active: series, totalMs, totalCost,
+        active: series, costS: costSeries, tokenS: tokenSeries, totalMs, totalCost,
       });
     }
     breakdown.sort((a, b) => b.activeMs - a.activeMs);

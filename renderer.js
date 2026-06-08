@@ -143,6 +143,9 @@ const cardEls = new Map(); // project path → its rendered card element (for in
 let filter = '';
 let overviewDays = 7;
 let recapRange = 'today'; // 'today' | 'week'
+let analyticsMetric = 'time'; // 'time' | 'cost' | 'tokens'
+let analyticsView = 'lines';  // 'lines' | 'stacked'
+let lastAnalyticsRange = null;
 let rootError = false;
 let showArchived = false;
 let tagFilter = '';
@@ -1024,6 +1027,96 @@ const SERIES_COLORS = ['#d97757', '#4f7d5b', '#5b7db1', '#c79a3c', '#9b6f9e', '#
 
 // Multi-line history graph: x = time over the selected range, y = active time,
 // one line per project. Buckets are hourly (1-day range) or daily (longer ranges).
+// ---- configurable Analytics chart (metric × view) ----
+function seriesFor(p, metric) {
+  if (metric === 'cost') return p.costS || [];
+  if (metric === 'tokens') return p.tokenS || [];
+  return p.active || []; // time, in ms
+}
+function fmtMetric(metric, v) {
+  if (metric === 'cost') return fmtCost(v);
+  if (metric === 'tokens') return fmtNum(Math.round(v));
+  return fmtDuration(v);
+}
+function yLabelMetric(metric, v) {
+  if (metric === 'cost') return '$' + (v >= 10 ? Math.round(v) : v.toFixed(1));
+  if (metric === 'tokens') return v >= 1000 ? Math.round(v / 1000) + 'k' : String(Math.round(v));
+  const min = v / 60000;
+  return min >= 120 ? (min / 60).toFixed(1) + 'h' : Math.round(min) + 'm';
+}
+function metricChart(range, metric, view) {
+  const { labels, hourly } = range;
+  const projects = (range.breakdown || []).filter((p) => seriesFor(p, metric).some((v) => v > 0));
+  if (!projects.length) {
+    const hint = metric === 'tokens' && hourly ? ' Token history needs a range of 7 days or more.' : '';
+    return `<p class="panel-sub">No ${metric} data in this range.${hint}</p>`;
+  }
+  const top = projects.slice(0, 8);
+  const n = labels.length;
+  const W = 760, H = 240, padL = 48, padR = 12, padT = 12, padB = 28;
+  const x = (i) => padL + (n <= 1 ? 0 : (i / (n - 1)) * (W - padL - padR));
+  let max = 0;
+  if (view === 'stacked') {
+    for (let i = 0; i < n; i++) { let sum = 0; top.forEach((p) => { sum += seriesFor(p, metric)[i] || 0; }); if (sum > max) max = sum; }
+  } else {
+    top.forEach((p) => seriesFor(p, metric).forEach((v) => { if (v > max) max = v; }));
+  }
+  max = max || 1;
+  const y = (v) => H - padB - (v / max) * (H - padT - padB);
+  let grid = '';
+  [0, 0.5, 1].forEach((f) => {
+    const yy = y(max * f);
+    grid += `<line x1="${padL}" y1="${yy}" x2="${W - padR}" y2="${yy}" stroke="var(--line)" stroke-width="1"/>`;
+    grid += `<text x="${padL - 6}" y="${yy + 3}" text-anchor="end" font-size="9" fill="var(--muted)">${yLabelMetric(metric, max * f)}</text>`;
+  });
+  let xlab = '';
+  const step = hourly ? 24 : Math.max(1, Math.ceil(n / 6));
+  labels.forEach((t, i) => {
+    const d = new Date(t);
+    const tick = hourly ? (d.getHours() === 0 && i > 0) : (i % step === 0);
+    if (tick) xlab += `<text x="${x(i)}" y="${H - padB + 13}" text-anchor="middle" font-size="9" fill="var(--muted)">${d.getMonth() + 1}/${d.getDate()}</text>`;
+  });
+  xlab += `<text x="${x(n - 1)}" y="${H - padB + 13}" text-anchor="end" font-size="9" fill="var(--muted)">now</text>`;
+  let plot = '';
+  if (view === 'stacked') {
+    const bw = (W - padL - padR) / n;
+    for (let i = 0; i < n; i++) {
+      let acc = 0; const d = new Date(labels[i]);
+      top.forEach((p, idx) => {
+        const v = seriesFor(p, metric)[i] || 0; if (v <= 0) return;
+        const h = (v / max) * (H - padT - padB);
+        const yTop = H - padB - ((acc + v) / max) * (H - padT - padB); acc += v;
+        plot += `<rect x="${(padL + i * bw + 0.5).toFixed(1)}" y="${yTop.toFixed(1)}" width="${Math.max(1, bw - 1).toFixed(1)}" height="${h.toFixed(1)}" fill="${SERIES_COLORS[idx % SERIES_COLORS.length]}"><title>${escapeHtml(p.name)}: ${fmtMetric(metric, v)} (${d.getMonth() + 1}/${d.getDate()})</title></rect>`;
+      });
+    }
+  } else {
+    top.forEach((p, idx) => {
+      const color = SERIES_COLORS[idx % SERIES_COLORS.length];
+      const pts = seriesFor(p, metric).map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+      plot += `<polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"><title>${escapeHtml(p.name)}</title></polyline>`;
+    });
+  }
+  const legend = top.map((p, idx) => {
+    const color = SERIES_COLORS[idx % SERIES_COLORS.length];
+    const tot = seriesFor(p, metric).reduce((a, b) => a + b, 0);
+    return `<div class="leg"><span class="leg-dot" style="background:${color}"></span><span class="leg-name">${escapeHtml(p.name)}</span><span class="leg-meta">${fmtMetric(metric, tot)}</span></div>`;
+  }).join('');
+  return `<svg class="linechart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${grid}${xlab}${plot}</svg><div class="legend">${legend}</div>`;
+}
+function analyticsChartPanel(range) {
+  const mb = (m, label) => `<button data-metric="${m}" class="${analyticsMetric === m ? 'active' : ''}">${label}</button>`;
+  const vb = (v, label) => `<button data-view="${v}" class="${analyticsView === v ? 'active' : ''}">${label}</button>`;
+  return `<div class="panel">
+    <div class="panel-title">Chart
+      <div class="chart-controls">
+        <div class="seg metric-seg">${mb('time', 'Time')}${mb('cost', 'Cost')}${mb('tokens', 'Tokens')}</div>
+        <div class="seg view-seg">${vb('lines', 'Lines')}${vb('stacked', 'Stacked')}</div>
+      </div>
+    </div>
+    <div id="analytics-chart">${metricChart(range, analyticsMetric, analyticsView)}</div>
+  </div>`;
+}
+
 function historyChart(range) {
   const { labels, hourly } = range;
   const projects = (range.breakdown || []).filter((p) => p.totalMs > 0);
@@ -1212,6 +1305,7 @@ async function loadAnalytics(days) {
     window.launcher.mcpUsage(),
   ]);
   const r = res.range;
+  lastAnalyticsRange = r;
   const body = $('analytics-body');
   const t = r.totals;
   const rangeWord = RANGE_LABEL[overviewDays] || `last ${overviewDays} days`;
@@ -1223,10 +1317,7 @@ async function loadAnalytics(days) {
       <div class="kpi"><div class="kpi-val">${fmtNum(t.sessions)}</div><div class="kpi-lbl">Sessions</div></div>
       <div class="kpi"><div class="kpi-val">${fmtNum(t.turns)}</div><div class="kpi-lbl">Turns</div></div>
     </div>
-    <div class="panel">
-      <div class="panel-title">History <span class="panel-hint">active time per project · ${rangeWord}</span></div>
-      ${historyChart(r)}
-    </div>
+    ${analyticsChartPanel(r)}
     <div class="panel">
       <div class="panel-title">Projects by time <span class="panel-hint">${rangeWord}</span></div>
       ${r.breakdown.length ? `<table class="breakdown">
@@ -1258,6 +1349,14 @@ async function loadAnalytics(days) {
   body.querySelectorAll('.lead-row[data-session]').forEach((row) => {
     row.addEventListener('click', () => openTranscript({ cwd: row.dataset.path, sessionId: row.dataset.session }, 'analytics'));
   });
+  const redrawChart = () => {
+    body.querySelectorAll('.metric-seg button').forEach((b) => b.classList.toggle('active', b.dataset.metric === analyticsMetric));
+    body.querySelectorAll('.view-seg button').forEach((b) => b.classList.toggle('active', b.dataset.view === analyticsView));
+    const c = $('analytics-chart');
+    if (c && lastAnalyticsRange) c.innerHTML = metricChart(lastAnalyticsRange, analyticsMetric, analyticsView);
+  };
+  body.querySelectorAll('.metric-seg button').forEach((b) => b.addEventListener('click', () => { analyticsMetric = b.dataset.metric; redrawChart(); }));
+  body.querySelectorAll('.view-seg button').forEach((b) => b.addEventListener('click', () => { analyticsView = b.dataset.view; redrawChart(); }));
 }
 
 // ---------- compare projects ----------
