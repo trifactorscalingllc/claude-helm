@@ -138,6 +138,7 @@ function relTime(ms) {
 let cfg = { root: '', pinned: [], launch: {} };
 let projects = [];
 let externalProjects = [];
+const cardEls = new Map(); // project path → its rendered card element (for in-place live updates)
 let filter = '';
 let overviewDays = 7;
 let rootError = false;
@@ -362,11 +363,14 @@ function render() {
   const pinnedList = list.filter((p) => cfg.pinned.includes(p.path));
   const rest = list.filter((p) => !cfg.pinned.includes(p.path));
 
+  cardEls.clear();
+  const addCard = (gridEl, p) => { const el = makeCard(p); cardEls.set(p.path, el); gridEl.appendChild(el); };
+
   const pinnedWrap = $('pinnedWrap');
   const pinnedGrid = $('pinnedGrid');
   pinnedGrid.innerHTML = '';
   if (pinnedList.length) {
-    pinnedList.forEach((p) => pinnedGrid.appendChild(makeCard(p)));
+    pinnedList.forEach((p) => addCard(pinnedGrid, p));
     pinnedWrap.classList.remove('hidden');
   } else {
     pinnedWrap.classList.add('hidden');
@@ -374,7 +378,7 @@ function render() {
 
   const grid = $('grid');
   grid.innerHTML = '';
-  rest.forEach((p) => grid.appendChild(makeCard(p)));
+  rest.forEach((p) => addCard(grid, p));
 
   $('allCount').textContent = rest.length;
   const empty = $('empty');
@@ -410,7 +414,7 @@ function render() {
   const extGrid = $('externalGrid');
   extGrid.innerHTML = '';
   if (extList.length) {
-    extList.forEach((p) => extGrid.appendChild(makeCard(p)));
+    extList.forEach((p) => addCard(extGrid, p));
     $('externalCount').textContent = extList.length;
     $('externalWrap').classList.remove('hidden');
   } else {
@@ -443,6 +447,45 @@ async function loadProjects() {
   populateTagFilter();
   $('footCount').textContent = `${projects.length} projects`;
   render();
+}
+
+// Update only the live numbers of the active (or just-ended) project cards — in
+// place, no DOM rebuild, no placeholder flash, no layout shift. Inactive projects
+// are left completely untouched (their data can't change while you're not in them).
+async function refreshLiveMetrics() {
+  const a = await window.launcher.activeSession();
+  const activePath = a ? a.path : null;
+  // a session started in a folder that has no card yet → add it (rare, one-time)
+  if (activePath && !cardEls.has(activePath)) { await reconcileProjects(); return; }
+  for (const [path, el] of cardEls) {
+    if (!el.isConnected) continue;
+    if (path === activePath || el.classList.contains('is-active')) {
+      const p = projects.find((x) => x.path === path) || externalProjects.find((x) => x.path === path);
+      if (p) loadMetrics(el, p); // updates time/cost/sparkline/active-dot/sessions in place
+    }
+  }
+}
+
+// Folder structure changed: reload the list, but only rebuild the grid if the set
+// of projects actually changed (added/removed/renamed). Otherwise refresh in place.
+async function reconcileProjects() {
+  const sig = (arr) => arr.map((p) => p.path).join('|');
+  const before = sig(projects) + '#' + sig(externalProjects);
+  const res = await window.launcher.listProjects(cfg.root);
+  if (res.error) { await loadProjects(); return; }
+  projects = res.projects;
+  externalProjects = res.external || [];
+  populateTagFilter();
+  $('footCount').textContent = `${projects.length} projects`;
+  if (sig(projects) + '#' + sig(externalProjects) !== before) {
+    render(); // a project was added/removed → rebuild
+  } else {
+    for (const [path, el] of cardEls) { // same set → refresh in place
+      if (!el.isConnected) continue;
+      const p = projects.find((x) => x.path === path) || externalProjects.find((x) => x.path === path);
+      if (p) { if (!p.external) loadStats(el, p); loadMetrics(el, p); }
+    }
+  }
 }
 
 function populateTagFilter() {
@@ -1517,21 +1560,33 @@ async function init() {
     else if (state === 'error') { toast.classList.add('hidden'); if (checkedManually && ustate) ustate.textContent = "Couldn't check right now — try again shortly."; checkedManually = false; }
   });
 
-  // live auto-refresh when projects or Claude session data change
-  window.launcher.onFsChanged(() => {
+  // live auto-refresh — surgical, not a full rebuild:
+  //  • 'projects' (folder add/remove) → reconcile the list, rebuild only if it changed
+  //  • 'claude'   (transcript activity) → update ONLY the active project's live numbers,
+  //    in place. Inactive cards never re-render, so nothing flickers or resizes.
+  let lastOverviewLive = 0;
+  window.launcher.onFsChanged((scope) => {
     clearIndex();
-    loadProjects();
+    if (scope === 'projects') reconcileProjects();
+    else refreshLiveMetrics();
     refreshActivePanel();
-    if (!$('view-overview').classList.contains('hidden')) loadOverview(overviewDays);
+    // the Overview is a heavy "report" view — refresh it at most every 25s while open
+    if (!$('view-overview').classList.contains('hidden') && Date.now() - lastOverviewLive > 25000) {
+      lastOverviewLive = Date.now();
+      loadOverview(overviewDays);
+    }
   });
 
   refreshActivePanel();
-  setInterval(refreshActivePanel, 15000); // catch the session going idle
+  // lightweight tick: keep the active project's numbers current and clear the "active"
+  // dot once a session goes idle — all in place, never a grid rebuild.
+  setInterval(() => { refreshLiveMetrics(); refreshActivePanel(); }, 15000);
 }
 
 // ---------- live "Active now" panel ----------
 let activeData = null;
 let activeTimer = null;
+let activeRenderedId = null; // which session the panel DOM currently shows
 
 function modelShort(m) {
   if (!m) return '';
@@ -1552,12 +1607,24 @@ async function refreshActivePanel() {
   activeData = a;
   if (!a) {
     panel.classList.add('hidden'); panel.innerHTML = '';
+    activeRenderedId = null;
     if (activeTimer) { clearInterval(activeTimer); activeTimer = null; }
     return;
   }
   panel.classList.remove('hidden');
-  drawActivePanel();
+  if (a.sessionId !== activeRenderedId) {
+    drawActivePanel();                 // new/changed session → full draw (rebinds buttons)
+    activeRenderedId = a.sessionId;
+  } else {
+    updateActivePanelStats();          // same session → update numbers in place (no flicker)
+  }
   if (!activeTimer) activeTimer = setInterval(tickActivePanel, 1000);
+}
+function updateActivePanelStats() {
+  const a = activeData; if (!a) return;
+  const panel = $('activePanel');
+  const tok = panel.querySelector('.ap-tokens'); if (tok) tok.textContent = `${fmtNum(a.tokens)} tokens`;
+  const cost = panel.querySelector('.ap-cost'); if (cost) cost.innerHTML = `${fmtCost(a.cost)} <span class="est">est.</span>`;
 }
 function drawActivePanel() {
   const a = activeData;
@@ -1568,8 +1635,8 @@ function drawActivePanel() {
     <div class="ap-name">${escapeHtml(a.name)}</div>
     <div class="ap-stats">
       <span class="ap-clock" data-first="${first}" title="How long this session has been running">${fmtClock(Date.now() - first)}</span>
-      <span>${fmtNum(a.tokens)} tokens</span>
-      <span title="${COST_TIP}">${fmtCost(a.cost)} <span class="est">est.</span></span>
+      <span class="ap-tokens">${fmtNum(a.tokens)} tokens</span>
+      <span class="ap-cost" title="${COST_TIP}">${fmtCost(a.cost)} <span class="est">est.</span></span>
     </div>
     <div class="ap-actions">
       <button class="btn primary ap-open">${svg('terminal', 15)} Open</button>
