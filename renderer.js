@@ -1227,6 +1227,16 @@ function insightsBlock(ins) {
   return `<div class="detail-grid">${trends}${top}</div>`;
 }
 
+// Friendly empty state for data views before there's any Claude history.
+function dataEmpty(icon, title, msg) {
+  return `<div class="welcome">
+      <div class="welcome-mark">${svg(icon, 28)}</div>
+      <h3>${title}</h3>
+      <p>${msg}</p>
+      <div class="welcome-actions"><button class="btn primary go-projects">${svg('grid', 14)} Go to projects</button></div>
+    </div>`;
+}
+
 // Overview = glanceable dashboard (fixed last-7-days): KPIs, recap, budget, heatmap.
 async function loadOverview() {
   const [res, bs] = await Promise.all([
@@ -1236,6 +1246,11 @@ async function loadOverview() {
   const t = res.range.totals;
   const forecast = (bs.weekly.spend / 7) * 30;
   const body = $('overview-body');
+  if (!t.sessions && !t.activeMs) {
+    body.innerHTML = dataEmpty('gauge', 'Your dashboard is ready', "No Claude Code activity in the last 7 days yet. Open a project in Claude and your time, sessions, and a daily recap will show up here automatically.");
+    const g = body.querySelector('.go-projects'); if (g) g.addEventListener('click', () => switchView('projects'));
+    return;
+  }
   body.innerHTML = `
     <div class="kpis">
       <div class="kpi"><div class="kpi-val">${fmtDuration(t.activeMs)}</div><div class="kpi-lbl">Time · 7 days</div></div>
@@ -1297,6 +1312,11 @@ async function loadAnalytics(days) {
   const body = $('analytics-body');
   const t = r.totals;
   const rangeWord = RANGE_LABEL[overviewDays] || `last ${overviewDays} days`;
+  if (!t.sessions && !r.breakdown.length) {
+    body.innerHTML = dataEmpty('chart', 'No analytics yet', `No Claude Code activity in the ${rangeWord}. Once you work in a project, charts, trends, and a per-project breakdown fill in here. Try a wider range, or open a project.`);
+    const g = body.querySelector('.go-projects'); if (g) g.addEventListener('click', () => switchView('projects'));
+    return;
+  }
 
   body.innerHTML = `
     <div class="kpis">
