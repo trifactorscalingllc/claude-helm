@@ -227,6 +227,58 @@ class Indexer {
     return Object.keys(this.store.projects);
   }
 
+  // Per-month {activeMs, cost} for one project, from its daily buckets.
+  monthlyTotals(cwd) {
+    const proj = this.store.projects[cwd];
+    const out = {};
+    if (!proj || !proj.daily) return out;
+    for (const day in proj.daily) {
+      const mo = day.slice(0, 7); // YYYY-MM
+      out[mo] = out[mo] || { activeMs: 0, cost: 0 };
+      out[mo].activeMs += proj.daily[day].activeMs || 0;
+      out[mo].cost += proj.daily[day].cost || 0;
+    }
+    return out;
+  }
+
+  // "While you were away" — activity since a timestamp (last app open).
+  // Cost/time come from daily buckets (>= the since-day); session + file
+  // counts come from session lastTs (>= since). Returns null on first run.
+  awaySince(sinceTs) {
+    if (!sinceTs) return null;
+    const sinceDay = new Date(sinceTs).toISOString().slice(0, 10);
+    const projects = [];
+    const fileSet = new Set();
+    let totalCost = 0, totalMs = 0, totalSessions = 0;
+    for (const cwd of Object.keys(this.store.projects)) {
+      const proj = this.store.projects[cwd];
+      let pCost = 0, pMs = 0;
+      for (const day in proj.daily) {
+        if (day >= sinceDay) { pCost += proj.daily[day].cost || 0; pMs += proj.daily[day].activeMs || 0; }
+      }
+      let pSessions = 0;
+      for (const sid in proj.sessions) {
+        const s = proj.sessions[sid];
+        if (s.lastTs && s.lastTs >= sinceTs) {
+          pSessions++;
+          for (const f in (s.files || {})) fileSet.add(f);
+        }
+      }
+      if (pMs > 0 || pCost > 0 || pSessions > 0) {
+        projects.push({ name: cwd.split(/[\\/]/).pop() || cwd, path: cwd, activeMs: pMs, cost: pCost, sessions: pSessions });
+        totalCost += pCost; totalMs += pMs; totalSessions += pSessions;
+      }
+    }
+    projects.sort((a, b) => b.activeMs - a.activeMs);
+    return {
+      since: sinceTs,
+      totalCost, totalMs, totalSessions,
+      projectsTouched: projects.length,
+      files: fileSet.size,
+      projects: projects.slice(0, 6),
+    };
+  }
+
   // Resolve the .jsonl file for a given project cwd + sessionId (from the files map).
   sessionFile(cwd, sessionId) {
     for (const p in this.store.files) {

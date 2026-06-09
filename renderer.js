@@ -344,6 +344,120 @@ function matches(p) {
   return true;
 }
 
+// "While you were away" — one-shot digest of activity since the last app open.
+async function loadAwayDigest() {
+  let d;
+  try { d = await window.launcher.awayDigest(); } catch { return; }
+  const node = $('awayDigest');
+  if (!node || !d || !d.totalSessions) return;
+  const projChips = d.projects.map((p) =>
+    `<button class="awd-chip" data-path="${escapeHtml(p.path)}" data-name="${escapeHtml(p.name)}" title="${escapeHtml(p.path)}">${escapeHtml(p.name)} <span class="awd-chip-meta">${fmtDuration(p.activeMs)}</span></button>`).join('');
+  node.innerHTML = `
+    <div class="awd-head">
+      <span class="ico" data-ico="clock"></span>
+      <span class="awd-title">While you were away</span>
+      <span class="awd-sub">since you last opened Helm · ${relTime(d.since)}</span>
+      <button class="awd-x" title="Dismiss">×</button>
+    </div>
+    <div class="awd-stats">
+      <span><strong>${d.totalSessions}</strong> session${d.totalSessions === 1 ? '' : 's'}</span>
+      <span><strong>${d.projectsTouched}</strong> project${d.projectsTouched === 1 ? '' : 's'}</span>
+      <span><strong>${fmtDuration(d.totalMs)}</strong> active</span>
+      ${d.files ? `<span><strong>${d.files}</strong> file${d.files === 1 ? '' : 's'} touched</span>` : ''}
+      <span class="awd-cost">${fmtCost(d.totalCost)}</span>
+    </div>
+    ${projChips ? `<div class="awd-projects">${projChips}</div>` : ''}`;
+  hydrateIcons(node);
+  node.classList.remove('hidden');
+  node.querySelector('.awd-x').addEventListener('click', () => node.classList.add('hidden'));
+  node.querySelectorAll('.awd-chip').forEach((c) =>
+    c.addEventListener('click', () => openDetail({ name: c.dataset.name, path: c.dataset.path })));
+}
+
+// ---------- Clients (billable work-log) ----------
+const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function fmtMonth(ym) {
+  const [y, m] = String(ym).split('-');
+  return `${MONTH_ABBR[(+m) - 1] || ym} ${y}`;
+}
+function fmtHours(ms) { return (ms / 3600000).toFixed(1) + ' h'; }
+let lastClientReport = null;
+
+async function loadClients() {
+  const body = $('clients-body');
+  body.innerHTML = '<p class="empty">Loading…</p>';
+  const rep = await window.launcher.clientReport();
+  lastClientReport = rep;
+  const assignments = rep.assignments || {};
+
+  let html = '';
+  if (!rep.hasClients) {
+    html += `<div class="panel teach">
+      <div class="panel-title">No clients assigned yet</div>
+      <p class="panel-sub">Assign a client to any project below and Helm rolls up <strong>hours and estimated cost per client, per month</strong> — a billable work-log you can export to CSV. Costs are estimates from token usage.</p>
+    </div>`;
+  } else {
+    html += rep.clients.map((c) => {
+      const months = Object.keys(c.months).sort().reverse().slice(0, 6);
+      const rows = months.map((mo) => `<tr>
+          <td>${fmtMonth(mo)}</td>
+          <td>${fmtHours(c.months[mo].activeMs)}</td>
+          <td>${fmtCost(c.months[mo].cost)}</td>
+        </tr>`).join('');
+      const projs = c.projects.sort((a, b) => b.activeMs - a.activeMs)
+        .map((p) => `<span class="cl-proj" title="${escapeHtml(p.path)}">${escapeHtml(p.name)} · ${fmtHours(p.activeMs)}</span>`).join('');
+      return `<div class="panel cl-card">
+        <div class="cl-head">
+          <div class="cl-name">${escapeHtml(c.name)}</div>
+          <div class="cl-totals">
+            <span><strong>${fmtHours(c.totalMs)}</strong> total</span>
+            <span><strong>${fmtCost(c.totalCost)}</strong></span>
+            <span>${c.projects.length} project${c.projects.length === 1 ? '' : 's'}</span>
+          </div>
+        </div>
+        <table class="breakdown cl-months">
+          <thead><tr><th>Month</th><th>Active</th><th>Est. cost</th></tr></thead>
+          <tbody>${rows || '<tr><td colspan="3" class="muted">No activity recorded yet.</td></tr>'}</tbody>
+        </table>
+        <div class="cl-projects">${projs}</div>
+      </div>`;
+    }).join('');
+  }
+
+  // assignment panel — set/edit a client on any project
+  const all = [...projects, ...externalProjects];
+  const rows = all.map((p) => `<div class="cl-assign-row">
+      <span class="cl-assign-name" title="${escapeHtml(p.path)}">${escapeHtml(p.name)}${p.external ? ' <span class="tag ext">external</span>' : ''}</span>
+      <input class="cl-assign-input" data-path="${escapeHtml(p.path)}" type="text" value="${escapeHtml(assignments[p.path] || '')}" placeholder="Client name…" spellcheck="false" autocomplete="off" />
+    </div>`).join('');
+  html += `<div class="panel">
+    <div class="panel-title">Assign projects to clients</div>
+    <p class="panel-sub">Type a client name to group a project under it. Clear the field to unassign. Projects sharing a name roll up together.</p>
+    <div class="cl-assign">${rows || '<p class="panel-sub">No projects yet.</p>'}</div>
+  </div>`;
+
+  body.innerHTML = html;
+  body.querySelectorAll('.cl-assign-input').forEach((inp) =>
+    inp.addEventListener('change', async () => {
+      await window.launcher.setClient(inp.dataset.path, inp.value);
+      loadClients();
+    }));
+}
+
+function buildClientsCsv(rep) {
+  const lines = ['Client,Month,Active hours,Estimated cost (USD)'];
+  for (const c of (rep.clients || [])) {
+    const months = Object.keys(c.months).sort();
+    for (const mo of months) {
+      const h = (c.months[mo].activeMs / 3600000).toFixed(2);
+      const cost = c.months[mo].cost.toFixed(2);
+      lines.push(`"${c.name.replace(/"/g, '""')}",${mo},${h},${cost}`);
+    }
+    lines.push(`"${c.name.replace(/"/g, '""')}",TOTAL,${(c.totalMs / 3600000).toFixed(2)},${c.totalCost.toFixed(2)}`);
+  }
+  return lines.join('\n');
+}
+
 function render() {
   const list = projects.filter(matches);
   // rank by likelihood-to-resume: pinned first, then most-recently-touched
@@ -567,7 +681,7 @@ async function saveLaunch(patch) {
 // ---------- views ----------
 function switchView(view) {
   document.querySelectorAll('.nav-item').forEach((n) => n.classList.toggle('active', n.dataset.view === view));
-  ['projects', 'search', 'settings', 'overview', 'analytics', 'detail', 'context', 'routines', 'transcript'].forEach((v) => {
+  ['projects', 'search', 'settings', 'overview', 'analytics', 'clients', 'detail', 'context', 'routines', 'transcript'].forEach((v) => {
     const el = $(`view-${v}`);
     if (el) el.classList.toggle('hidden', view !== v);
   });
@@ -575,6 +689,7 @@ function switchView(view) {
   if (view === 'analytics') loadAnalytics();
   if (view === 'context') loadContext();
   if (view === 'search') loadSearch();
+  if (view === 'clients') loadClients();
 }
 
 // ---------- Transcript viewer ----------
@@ -1750,7 +1865,7 @@ async function init() {
   await loadProjects();
 
   if (!cfg.onboarded) showOnboarding();
-  else detectClaudeBanner();
+  else { detectClaudeBanner(); loadAwayDigest(); }
 
   $('themeToggle').addEventListener('click', async () => {
     const next = (cfg.theme === 'dark') ? 'light' : 'dark';
@@ -1800,6 +1915,19 @@ async function init() {
     });
   }
   if ($('hotkeyReset')) $('hotkeyReset').addEventListener('click', () => saveHotkey({ hotkey: 'CommandOrControl+Shift+H', enabled: true }));
+
+  // Clients → Export CSV
+  if ($('exportClients')) $('exportClients').addEventListener('click', () => {
+    if (!lastClientReport || !lastClientReport.hasClients) { showStatus('Assign a client to a project first.', 'warn'); return; }
+    const csv = buildClientsCsv(lastClientReport);
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `client-worklog-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    showStatus('Exported client work-log to your Downloads.', 'ok');
+  });
 
   // Settings subtabs (General / Personalize / AI & Usage / About)
   document.querySelectorAll('#settingsTabs button').forEach((tab) =>

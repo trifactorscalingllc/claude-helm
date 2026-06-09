@@ -39,6 +39,9 @@
         <button class="nav-item" data-view="analytics">
           <span class="ico" data-ico="chart"></span> Analytics
         </button>
+        <button class="nav-item" data-view="clients">
+          <span class="ico" data-ico="coin"></span> Clients
+        </button>
         <button class="nav-item" data-view="context">
           <span class="ico" data-ico="brain"></span> Context
         </button>
@@ -85,6 +88,8 @@
           <div id="claudeBanner" class="banner warn hidden"></div>
           <div id="indexBanner" class="banner hidden">Indexing your Claude history…</div>
           <div id="status" class="banner hidden"></div>
+
+          <div id="awayDigest" class="away-digest hidden"></div>
 
           <div id="ambient" class="ambient hidden"></div>
 
@@ -358,6 +363,18 @@
         </header>
         <div class="scroll">
           <div id="analytics-body"></div>
+        </div>
+      </section>
+
+      <!-- Clients view (billable work-log) -->
+      <section id="view-clients" class="view hidden">
+        <header class="topbar">
+          <h2 class="view-title">Clients</h2>
+          <span class="topbar-sub">billable work-log · estimated</span>
+          <button id="exportClients" class="btn ghost" style="margin-left:auto"><span class="ico" data-ico="download"></span> Export CSV</button>
+        </header>
+        <div class="scroll">
+          <div id="clients-body"></div>
         </div>
       </section>
 

@@ -32,6 +32,7 @@ const DEFAULTS = {
   notifications: true, // desktop notifications (session finished, budget)
   archived: [],        // project paths hidden from the dashboard
   tags: {},            // { projectPath: "client"|"personal"|... }
+  clients: {},         // { projectPath: "Client name" } for the billable work-log
   routines: [],        // recurring `claude -p` tasks
   redact: false,       // blur descriptions for screenshots/screen-sharing (off by default)
   openAtLogin: false,  // launch Claude Helm when you log in
@@ -1023,6 +1024,18 @@ ipcMain.handle('active-sessions', () => {
   try { return indexer.activeSessions(150000); } catch { return []; }
 });
 
+// "While you were away" — activity since the previous app open. Called once per
+// launch; updates lastSeenTs so the next open compares against this one.
+ipcMain.handle('away-digest', () => {
+  const cfg = loadConfig();
+  const since = cfg.lastSeenTs || 0;
+  let digest = null;
+  try { digest = indexer.awaySince(since); } catch { digest = null; }
+  cfg.lastSeenTs = Date.now();
+  saveConfig(cfg);
+  return digest;
+});
+
 ipcMain.handle('insights', () => {
   try { return indexer.insights(); } catch { return null; }
 });
@@ -1141,6 +1154,40 @@ ipcMain.handle('set-tag', (_e, { projectPath, tag }) => {
   if (!tag) delete cfg.tags[projectPath]; else cfg.tags[projectPath] = tag;
   saveConfig(cfg);
   return cfg.tags;
+});
+
+ipcMain.handle('set-client', (_e, { projectPath, client }) => {
+  const cfg = loadConfig();
+  cfg.clients = cfg.clients || {};
+  const name = String(client || '').trim().slice(0, 60);
+  if (!name) delete cfg.clients[projectPath]; else cfg.clients[projectPath] = name;
+  saveConfig(cfg);
+  return cfg.clients;
+});
+
+// Billable work-log: group projects by assigned client, with per-month rollups.
+ipcMain.handle('client-report', () => {
+  const cfg = loadConfig();
+  const clients = cfg.clients || {};
+  const groups = {}; // name -> { name, projects, months, totalMs, totalCost }
+  for (const [pPath, name] of Object.entries(clients)) {
+    if (!name) continue;
+    const g = groups[name] || (groups[name] = { name, projects: [], months: {}, totalMs: 0, totalCost: 0 });
+    const m = indexer.metricsFor(pPath);
+    const pMs = m ? m.totals.activeMs : 0;
+    const pCost = m ? m.totals.cost : 0;
+    const pSessions = m ? m.totals.sessions : 0;
+    g.projects.push({ path: pPath, name: pPath.split(/[\\/]/).pop() || pPath, activeMs: pMs, cost: pCost, sessions: pSessions });
+    g.totalMs += pMs; g.totalCost += pCost;
+    const mt = indexer.monthlyTotals(pPath);
+    for (const mo in mt) {
+      g.months[mo] = g.months[mo] || { activeMs: 0, cost: 0 };
+      g.months[mo].activeMs += mt[mo].activeMs;
+      g.months[mo].cost += mt[mo].cost;
+    }
+  }
+  const list = Object.values(groups).sort((a, b) => b.totalCost - a.totalCost);
+  return { clients: list, hasClients: list.length > 0, assignments: clients };
 });
 
 ipcMain.handle('open-in-editor', (_e, projectPath) => {
