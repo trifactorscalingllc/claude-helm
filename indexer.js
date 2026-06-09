@@ -41,6 +41,13 @@ class Indexer {
     this.storePath = storePath;
     this.store = { version: 1, files: {}, projects: {} };
     this.loaded = false;
+    // ---- query caches (invalidated when a project's data changes) ----
+    this._totals = new Map(); // cwd -> computed totals (heavy map merge done once)
+    this._combinedDaily = null; // merged per-day map across all projects
+    // ---- debounced async persistence ----
+    this._saveTimer = null;
+    this._saving = false;
+    this._saveQueued = false;
   }
 
   load() {
@@ -55,10 +62,42 @@ class Indexer {
     } catch {
       this.store = { version: STORE_VERSION, files: {}, projects: {} };
     }
+    this._totals.clear();
+    this._combinedDaily = null;
     this.loaded = true;
   }
 
-  save() {
+  // Drop cached aggregates for one project (call whenever its sessions/daily change).
+  _invalidate(cwd) {
+    this._totals.delete(cwd);
+    this._combinedDaily = null;
+  }
+
+  // Async, debounced persistence. The store is only needed for restart durability
+  // (offsets + aggregates are recoverable by re-indexing), so we batch writes
+  // instead of doing a full synchronous JSON write on every appended line.
+  scheduleSave() {
+    if (this._saveTimer) return; // leading-edge: flush ~1.5s after the first change
+    this._saveTimer = setTimeout(() => { this._saveTimer = null; this.save(); }, 1500);
+  }
+
+  async save() {
+    if (this._saving) { this._saveQueued = true; return; }
+    this._saving = true;
+    try {
+      do {
+        this._saveQueued = false;
+        const data = JSON.stringify(this.store); // sync snapshot (atomic vs. JS)
+        const tmp = this.storePath + '.tmp';
+        await fsp.writeFile(tmp, data);
+        await fsp.rename(tmp, this.storePath);
+      } while (this._saveQueued);
+    } catch {} finally { this._saving = false; }
+  }
+
+  // Synchronous flush for app shutdown (before-quit), so nothing pending is lost.
+  flushSync() {
+    if (this._saveTimer) { clearTimeout(this._saveTimer); this._saveTimer = null; }
     try {
       const tmp = this.storePath + '.tmp';
       fs.writeFileSync(tmp, JSON.stringify(this.store));
@@ -199,6 +238,7 @@ class Indexer {
     rec.cwd = cwd;
     rec.sessionId = sessionId;
     this.store.files[fullPath] = rec;
+    if (cwd) this._invalidate(cwd); // this project's cached aggregates are now stale
   }
 
   // Walk all transcript dirs and index every jsonl (incremental).
@@ -216,7 +256,7 @@ class Indexer {
       }
     }
     this.pruneHourly(10); // keep hourly buckets bounded (~10 days)
-    this.save();
+    this.scheduleSave(); // debounced async write instead of a blocking full write
   }
 
   // Drop hourly buckets older than `days` to keep the store small.
@@ -371,23 +411,27 @@ class Indexer {
   metricsFor(projectPath) {
     const p = this.store.projects[projectPath];
     if (!p) return null;
-    const totals = {
-      sessions: 0, turns: 0, activeMs: 0, cost: 0,
-      tokens: { in: 0, out: 0, cw: 0, cr: 0 },
-      lastTs: 0, lastTitle: '', models: {}, tools: {}, files: {},
-    };
-    for (const id in p.sessions) {
-      const s = p.sessions[id];
-      totals.sessions += 1;
-      totals.turns += s.turns;
-      totals.activeMs += s.activeMs;
-      totals.cost += s.cost;
-      totals.tokens.in += s.tokens.in; totals.tokens.out += s.tokens.out;
-      totals.tokens.cw += s.tokens.cw; totals.tokens.cr += s.tokens.cr;
-      if (s.lastTs > totals.lastTs) { totals.lastTs = s.lastTs; if (s.title) totals.lastTitle = s.title; }
-      for (const m in s.models) totals.models[m] = (totals.models[m] || 0) + s.models[m];
-      for (const t in s.tools) totals.tools[t] = (totals.tools[t] || 0) + s.tools[t];
-      for (const f in s.files) totals.files[f] = (totals.files[f] || 0) + s.files[f];
+    let totals = this._totals.get(projectPath);
+    if (!totals) {
+      totals = {
+        sessions: 0, turns: 0, activeMs: 0, cost: 0,
+        tokens: { in: 0, out: 0, cw: 0, cr: 0 },
+        lastTs: 0, lastTitle: '', models: {}, tools: {}, files: {},
+      };
+      for (const id in p.sessions) {
+        const s = p.sessions[id];
+        totals.sessions += 1;
+        totals.turns += s.turns;
+        totals.activeMs += s.activeMs;
+        totals.cost += s.cost;
+        totals.tokens.in += s.tokens.in; totals.tokens.out += s.tokens.out;
+        totals.tokens.cw += s.tokens.cw; totals.tokens.cr += s.tokens.cr;
+        if (s.lastTs > totals.lastTs) { totals.lastTs = s.lastTs; if (s.title) totals.lastTitle = s.title; }
+        for (const m in s.models) totals.models[m] = (totals.models[m] || 0) + s.models[m];
+        for (const t in s.tools) totals.tools[t] = (totals.tools[t] || 0) + s.tools[t];
+        for (const f in s.files) totals.files[f] = (totals.files[f] || 0) + s.files[f];
+      }
+      this._totals.set(projectPath, totals);
     }
     return { totals, daily: p.daily, sessions: p.sessions };
   }
@@ -452,10 +496,10 @@ class Indexer {
     };
   }
 
-  // Combined daily activity across all projects (for the heatmap).
-  combinedDaily(days) {
-    const out = [];
-    const today = new Date();
+  // Merged per-day activity across all projects. Cached — the tray polls
+  // spendInDays() every 30s, which used to re-merge every project's daily map.
+  _combinedDailyMap() {
+    if (this._combinedDaily) return this._combinedDaily;
     const map = {};
     for (const cwd of Object.keys(this.store.projects)) {
       const d = this.store.projects[cwd].daily || {};
@@ -465,6 +509,15 @@ class Indexer {
         map[k].cost += d[k].cost || 0;
       }
     }
+    this._combinedDaily = map;
+    return map;
+  }
+
+  // Combined daily activity across all projects (for the heatmap).
+  combinedDaily(days) {
+    const out = [];
+    const today = new Date();
+    const map = this._combinedDailyMap();
     for (let i = days - 1; i >= 0; i--) {
       const dt = new Date(today);
       dt.setDate(today.getDate() - i);
@@ -497,13 +550,16 @@ class Indexer {
   }
 
   // Projects with a session touched within `withinMs` (default 2 min) — "active now".
+  // Scalar-only (max lastTs); avoids rebuilding the active project's heavy map merge.
   activeProjects(withinMs = 120000) {
     const now = Date.now();
     const out = [];
     for (const cwd in this.store.projects) {
-      const m = this.metricsFor(cwd);
-      if (m && m.totals.lastTs && now - m.totals.lastTs < withinMs) {
-        out.push({ path: cwd, name: cwd.split(/[\\/]/).pop() || cwd, lastTs: m.totals.lastTs });
+      const sessions = this.store.projects[cwd].sessions;
+      let lastTs = 0;
+      for (const id in sessions) { const t = sessions[id].lastTs; if (t > lastTs) lastTs = t; }
+      if (lastTs && now - lastTs < withinMs) {
+        out.push({ path: cwd, name: cwd.split(/[\\/]/).pop() || cwd, lastTs });
       }
     }
     return out;
@@ -652,11 +708,18 @@ class Indexer {
   }
 
   // For the session-finished notifier: latest activity timestamp per project.
+  // Scalar-only loop (no map merge) — runs on every 30s tick.
   lastActivityMap() {
     const out = {};
     for (const cwd in this.store.projects) {
-      const m = this.metricsFor(cwd);
-      if (m) out[cwd] = { lastTs: m.totals.lastTs, name: cwd.split(/[\\/]/).pop() || cwd, cost: m.totals.cost, activeMs: m.totals.activeMs };
+      const sessions = this.store.projects[cwd].sessions;
+      let lastTs = 0, cost = 0, activeMs = 0;
+      for (const id in sessions) {
+        const s = sessions[id];
+        if (s.lastTs > lastTs) lastTs = s.lastTs;
+        cost += s.cost || 0; activeMs += s.activeMs || 0;
+      }
+      out[cwd] = { lastTs, name: cwd.split(/[\\/]/).pop() || cwd, cost, activeMs };
     }
     return out;
   }

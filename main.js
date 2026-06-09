@@ -566,7 +566,7 @@ app.whenReady().then(() => {
   });
 });
 
-app.on('before-quit', () => { app.isQuitting = true; });
+app.on('before-quit', () => { app.isQuitting = true; try { indexer.flushSync(); } catch {} });
 app.on('will-quit', () => { try { globalShortcut.unregisterAll(); } catch {} });
 
 app.on('window-all-closed', () => {
