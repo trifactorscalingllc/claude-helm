@@ -20,6 +20,7 @@ const DEFAULTS = {
   apiKey: '',
   aiSummaries: false,
   theme: 'light',
+  accent: 'clay',      // accent palette: clay | lagoon | aubergine | jade
   terminalCommand: '', // optional custom terminal template with {dir} and {cmd}
   autoTrust: false,    // off by default — opt-in (writes hasTrustDialogAccepted)
   onboarded: false,    // first-run setup completed
@@ -1643,4 +1644,12 @@ ipcMain.handle('set-theme', (_e, theme) => {
   cfg.theme = theme === 'dark' ? 'dark' : 'light';
   saveConfig(cfg);
   return cfg.theme;
+});
+
+const ACCENTS = ['clay', 'lagoon', 'aubergine', 'jade'];
+ipcMain.handle('set-accent', (_e, accent) => {
+  const cfg = loadConfig();
+  cfg.accent = ACCENTS.includes(accent) ? accent : 'clay';
+  saveConfig(cfg);
+  return cfg.accent;
 });

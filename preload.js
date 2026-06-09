@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('launcher', {
   adminBilling: () => ipcRenderer.invoke('admin-billing'),
   setAiSummaries: (on) => ipcRenderer.invoke('set-ai-summaries', on),
   setTheme: (theme) => ipcRenderer.invoke('set-theme', theme),
+  setAccent: (accent) => ipcRenderer.invoke('set-accent', accent),
   setRedact: (on) => ipcRenderer.invoke('set-redact', on),
   setAutoTrust: (on) => ipcRenderer.invoke('set-auto-trust', on),
   completeOnboarding: (patch) => ipcRenderer.invoke('complete-onboarding', patch),

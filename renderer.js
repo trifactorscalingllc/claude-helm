@@ -1498,6 +1498,7 @@ function buildPaletteCommands() {
     .forEach(([v, label, icon]) => cmds.push({ icon, label, hint: 'Tab', run: () => switchView(v) }));
   cmds.push({ icon: 'plus', label: 'New project', hint: 'Action', run: () => { switchView('projects'); openModal(); } });
   cmds.push({ icon: 'moon', label: 'Toggle dark mode', hint: 'Action', run: async () => { const next = (cfg.theme === 'dark') ? 'light' : 'dark'; cfg.theme = await window.launcher.setTheme(next); applyTheme(cfg.theme); } });
+  ACCENTS.forEach((a) => cmds.push({ icon: 'star', label: 'Accent: ' + a.charAt(0).toUpperCase() + a.slice(1), hint: 'Theme', run: async () => { cfg.accent = await window.launcher.setAccent(a); applyAccent(cfg.accent); } }));
   [...projects, ...externalProjects].forEach((p) => {
     cmds.push({ icon: p.external ? 'layers' : 'folder', label: p.name, sub: p.path, hint: 'Open in Claude',
       run: async () => { const r = await window.launcher.openProject(p.path); handleLaunchResult(r, p.name); } });
@@ -1586,6 +1587,17 @@ function applyTheme(theme) {
   }
 }
 
+const ACCENTS = ['clay', 'lagoon', 'aubergine', 'jade'];
+function applyAccent(accent) {
+  const a = ACCENTS.includes(accent) ? accent : 'clay';
+  // 'clay' is the default :root palette — no attribute needed.
+  if (a === 'clay') document.documentElement.removeAttribute('data-accent');
+  else document.documentElement.setAttribute('data-accent', a);
+  document.querySelectorAll('#accentPicker .accent-sw').forEach((b) => {
+    b.classList.toggle('sel', b.dataset.accent === a);
+  });
+}
+
 // ---------- first-run onboarding + robustness ----------
 async function showOnboarding() {
   const ov = $('onboard');
@@ -1648,6 +1660,7 @@ async function init() {
   hydrateIcons();
   cfg = await window.launcher.getConfig();
   applyTheme(cfg.theme || 'light');
+  applyAccent(cfg.accent || 'clay');
   applyRedact(cfg.redact);
   // quick toggle for screenshots / screen-sharing
   document.addEventListener('keydown', async (e) => {
@@ -1699,6 +1712,12 @@ async function init() {
     cfg.theme = await window.launcher.setTheme(next);
     applyTheme(cfg.theme);
   });
+
+  document.querySelectorAll('#accentPicker .accent-sw').forEach((sw) =>
+    sw.addEventListener('click', async () => {
+      cfg.accent = await window.launcher.setAccent(sw.dataset.accent);
+      applyAccent(cfg.accent);
+    }));
 
   document.querySelectorAll('.nav-item').forEach((n) =>
     n.addEventListener('click', () => switchView(n.dataset.view)));
@@ -1895,7 +1914,7 @@ function usageBarsSvg(bars) {
   const rects = bars.map((b, i) => {
     const h = (b.dTok / max) * (H - 3);
     const x = (start + i) * bw + gap / 2;
-    return `<rect x="${x.toFixed(1)}" y="${(H - h).toFixed(1)}" width="${Math.max(1, bw - gap).toFixed(1)}" height="${Math.max(0, h).toFixed(1)}" rx="1" fill="${i === bars.length - 1 ? '#c25c3b' : '#d97757'}"/>`;
+    return `<rect x="${x.toFixed(1)}" y="${(H - h).toFixed(1)}" width="${Math.max(1, bw - gap).toFixed(1)}" height="${Math.max(0, h).toFixed(1)}" rx="1" fill="${i === bars.length - 1 ? 'var(--clay-deep)' : 'var(--clay)'}"/>`;
   }).join('');
   return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" class="ap-graph-svg">${rects}</svg>`;
 }
