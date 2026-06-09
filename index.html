@@ -202,6 +202,27 @@
               </span>
             </label>
           </div>
+
+          <div class="panel">
+            <div class="panel-title">Global shortcut</div>
+            <p class="panel-sub">Summon (or hide) Claude Helm from anywhere — even when it's minimized to the tray or you're in another app.</p>
+            <label class="toggle">
+              <input type="checkbox" id="optHotkeyEnabled" />
+              <span class="track"></span>
+              <span class="toggle-text">
+                <strong>Enable global shortcut</strong>
+                <em>Toggles the Helm window from any app.</em>
+              </span>
+            </label>
+            <div class="field" style="margin-bottom:0">
+              <span>Shortcut</span>
+              <div class="hotkey-row">
+                <input id="optHotkey" class="hotkey-input" type="text" readonly placeholder="Click, then press your keys…" spellcheck="false" />
+                <button id="hotkeyReset" class="btn ghost">Reset</button>
+              </div>
+              <div id="hotkeyHint" class="panel-sub" style="margin-top:6px">Click the box and press a combination (must include Ctrl, Alt, or Shift).</div>
+            </div>
+          </div>
           </div><!-- /general -->
 
           <!-- ===== Personalize ===== -->

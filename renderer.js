@@ -544,6 +544,8 @@ function syncSettingsUI() {
   $('optOpenAtLogin').checked = !!cfg.openAtLogin;
   $('optStartHidden').checked = !!cfg.startHidden;
   $('optStartHidden').disabled = !cfg.openAtLogin;
+  if ($('optHotkeyEnabled')) $('optHotkeyEnabled').checked = cfg.hotkeyEnabled !== false;
+  if ($('optHotkey')) { $('optHotkey').value = prettyHotkey(cfg.hotkey || 'CommandOrControl+Shift+H'); $('optHotkey').disabled = cfg.hotkeyEnabled === false; }
   const osNames = { win32: 'Windows Terminal', darwin: 'macOS Terminal/iTerm', linux: 'Linux terminal' };
   $('osName').textContent = osNames[window.launcher.platform] || window.launcher.platform;
   updateApiHint();
@@ -989,6 +991,7 @@ async function openDetail(p) {
             <div class="s-title">${escapeHtml(s.title || 'Untitled session')} <span class="s-open">read ›</span></div>
             <div class="s-meta">${relTime(s.lastTs)} · ${fmtDuration(s.activeMs)} · ${s.turns} turns</div>
           </div>
+          <button class="s-resume" title="Reopen this exact conversation in Claude Code (claude --resume)">${svg('repeat', 14)} Resume</button>
           <button class="s-branch" title="Fork this conversation into a new Claude Code session (original untouched)">${svg('branch', 14)} Branch</button>
         </div>`).join('')}
       </div>
@@ -1029,6 +1032,13 @@ async function openDetail(p) {
   if (df) df.addEventListener('click', () => window.launcher.openInExplorer(p.path));
   body.querySelectorAll('.session-row[data-session]').forEach((row) => {
     row.addEventListener('click', () => openTranscript({ cwd: p.path, sessionId: row.dataset.session }, 'detail'));
+    const rb = row.querySelector('.s-resume');
+    if (rb) rb.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const r = await window.launcher.resumeSession(p.path, row.dataset.session);
+      if (r && r.ok) showStatus('Resuming this session in Claude Code…', 'ok');
+      else showStatus((r && r.error) || 'Could not resume this session.', 'warn');
+    });
     const bb = row.querySelector('.s-branch');
     if (bb) bb.addEventListener('click', async (e) => {
       e.stopPropagation();
@@ -1590,6 +1600,37 @@ function applyTheme(theme) {
     b.classList.toggle('active', b.dataset.theme === theme));
 }
 
+// ---- global-shortcut helpers ----
+const IS_MAC = window.launcher.platform === 'darwin';
+// Human-readable label for an Electron accelerator string.
+function prettyHotkey(accel) {
+  if (!accel) return '';
+  return accel.split('+').map((part) => {
+    if (part === 'CommandOrControl' || part === 'CmdOrCtrl') return IS_MAC ? '⌘' : 'Ctrl';
+    if (part === 'Command' || part === 'Cmd' || part === 'Super' || part === 'Meta') return IS_MAC ? '⌘' : 'Win';
+    if (part === 'Control') return 'Ctrl';
+    if (part === 'Alt' || part === 'Option') return IS_MAC ? '⌥' : 'Alt';
+    if (part === 'Shift') return IS_MAC ? '⇧' : 'Shift';
+    return part;
+  }).join(' + ');
+}
+// Convert a keydown event into an Electron accelerator, or '' if not a valid combo.
+function eventToAccelerator(e) {
+  const mods = [];
+  if (e.ctrlKey || e.metaKey) mods.push('CommandOrControl');
+  if (e.altKey) mods.push('Alt');
+  if (e.shiftKey) mods.push('Shift');
+  let key = e.key;
+  if (['Control', 'Shift', 'Alt', 'Meta', 'OS'].includes(key)) return ''; // modifier alone
+  if (key === ' ' || e.code === 'Space') key = 'Space';
+  else if (/^[a-z]$/i.test(key)) key = key.toUpperCase();
+  else if (/^F\d{1,2}$/.test(key)) { /* function keys as-is */ }
+  else if (/^Arrow/.test(key)) key = key.replace('Arrow', '');
+  else if (key.length !== 1) return ''; // unsupported special key
+  if (!mods.length) return ''; // require at least one modifier
+  return [...mods, key].join('+');
+}
+
 const ACCENTS = ['clay', 'lagoon', 'aubergine', 'jade'];
 function applyAccent(accent) {
   const a = ACCENTS.includes(accent) ? accent : 'clay';
@@ -1730,6 +1771,35 @@ async function init() {
       cfg.theme = await window.launcher.setTheme(b.dataset.theme);
       applyTheme(cfg.theme);
     }));
+
+  // Global shortcut (Settings → General)
+  const hkInput = $('optHotkey');
+  const hkHint = $('hotkeyHint');
+  async function saveHotkey(opts) {
+    const r = await window.launcher.setHotkey(opts);
+    cfg.hotkey = r.hotkey; cfg.hotkeyEnabled = r.enabled;
+    if (hkInput) hkInput.value = prettyHotkey(r.hotkey);
+    if (hkHint) hkHint.textContent = !r.enabled
+      ? 'Shortcut disabled.'
+      : (r.registered ? `Active — press ${prettyHotkey(r.hotkey)} from anywhere to summon Helm.` : (r.error || 'Could not register that shortcut.'));
+  }
+  if ($('optHotkeyEnabled')) $('optHotkeyEnabled').addEventListener('change', (e) => {
+    if (hkInput) hkInput.disabled = !e.target.checked;
+    saveHotkey({ enabled: e.target.checked });
+  });
+  if (hkInput) {
+    hkInput.addEventListener('focus', () => { hkInput.classList.add('recording'); hkInput.value = 'Press keys…'; });
+    hkInput.addEventListener('blur', () => { hkInput.classList.remove('recording'); hkInput.value = prettyHotkey(cfg.hotkey || 'CommandOrControl+Shift+H'); });
+    hkInput.addEventListener('keydown', (e) => {
+      e.preventDefault();
+      const accel = eventToAccelerator(e);
+      if (!accel) { if (hkHint) hkHint.textContent = 'Use at least one modifier (Ctrl/Alt/Shift) plus a key.'; return; }
+      hkInput.classList.remove('recording');
+      saveHotkey({ hotkey: accel });
+      hkInput.blur();
+    });
+  }
+  if ($('hotkeyReset')) $('hotkeyReset').addEventListener('click', () => saveHotkey({ hotkey: 'CommandOrControl+Shift+H', enabled: true }));
 
   // Settings subtabs (General / Personalize / AI & Usage / About)
   document.querySelectorAll('#settingsTabs button').forEach((tab) =>

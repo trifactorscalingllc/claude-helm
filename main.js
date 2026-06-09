@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Tray, Menu, nativeImage, Notification, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Tray, Menu, nativeImage, Notification, safeStorage, globalShortcut } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const fsp = fs.promises;
@@ -21,6 +21,9 @@ const DEFAULTS = {
   aiSummaries: false,
   theme: 'light',
   accent: 'clay',      // accent palette: clay | lagoon | aubergine | jade
+  hotkey: 'CommandOrControl+Shift+H', // global shortcut to summon the window
+  hotkeyEnabled: true, // register the global shortcut
+  lastSeenTs: 0,       // last time the window was focused/opened (for "while you were away")
   terminalCommand: '', // optional custom terminal template with {dir} and {cmd}
   autoTrust: false,    // off by default — opt-in (writes hasTrustDialogAccepted)
   onboarded: false,    // first-run setup completed
@@ -104,6 +107,25 @@ function showMainWindow() {
     mainWindow.show();
     mainWindow.focus();
   } else { createWindow(); }
+}
+
+// ---- global shortcut to summon (or dismiss) the launcher from anywhere ----
+function toggleMainWindow() {
+  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() && mainWindow.isFocused()) {
+    mainWindow.hide();
+  } else {
+    showMainWindow();
+  }
+}
+function registerHotkey(cfg) {
+  globalShortcut.unregisterAll();
+  if (!cfg.hotkeyEnabled || !cfg.hotkey) return { ok: true, registered: false };
+  try {
+    const ok = globalShortcut.register(cfg.hotkey, toggleMainWindow);
+    return { ok, registered: ok, error: ok ? '' : 'That shortcut is already taken by another app.' };
+  } catch (err) {
+    return { ok: false, registered: false, error: err.message || 'Invalid shortcut.' };
+  }
 }
 function updateTray() {
   if (!tray) return;
@@ -340,6 +362,13 @@ function createWindow() {
   });
   mainWindow.removeMenu();
   mainWindow.loadFile('index.html');
+  // Re-send the last known update state once the renderer is ready, so a 'ready'
+  // that fired before the page registered its listener is never missed.
+  mainWindow.webContents.on('did-finish-load', () => {
+    if (lastUpdateState && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('update-status', lastUpdateState);
+    }
+  });
   mainWindow.on('closed', () => { mainWindow = null; });
   // closing the window hides it to the tray (keeps monitoring); Quit from the tray to exit
   mainWindow.on('close', (e) => {
@@ -348,7 +377,9 @@ function createWindow() {
 }
 
 // ---- auto-update (electron-updater → GitHub Releases) ----
+let lastUpdateState = null; // remembered so a freshly-loaded renderer never misses 'ready'
 function sendUpdate(state, info) {
+  lastUpdateState = { state, info };
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update-status', { state, info });
 }
 function setupAutoUpdate() {
@@ -521,6 +552,7 @@ app.whenReady().then(() => {
   setupAutoUpdate();
   indexer.load();
   buildTray();
+  registerHotkey(loadConfig()); // global summon shortcut
   applyLoginItem(loadConfig()); // keep OS login-item in sync with saved setting
   setInterval(tick, 30000); // refresh tray + notification checks every 30s
   // backfill, then tell the renderer to refresh with full data
@@ -534,6 +566,7 @@ app.whenReady().then(() => {
 });
 
 app.on('before-quit', () => { app.isQuitting = true; });
+app.on('will-quit', () => { try { globalShortcut.unregisterAll(); } catch {} });
 
 app.on('window-all-closed', () => {
   // with a tray the app keeps running in the background; otherwise quit
@@ -1652,4 +1685,13 @@ ipcMain.handle('set-accent', (_e, accent) => {
   cfg.accent = ACCENTS.includes(accent) ? accent : 'clay';
   saveConfig(cfg);
   return cfg.accent;
+});
+
+ipcMain.handle('set-hotkey', (_e, opts) => {
+  const cfg = loadConfig();
+  if (opts && 'enabled' in opts) cfg.hotkeyEnabled = !!opts.enabled;
+  if (opts && typeof opts.hotkey === 'string' && opts.hotkey.trim()) cfg.hotkey = opts.hotkey.trim();
+  saveConfig(cfg);
+  const res = registerHotkey(cfg);
+  return { hotkey: cfg.hotkey, enabled: cfg.hotkeyEnabled, registered: res.registered, error: res.error || '' };
 });
