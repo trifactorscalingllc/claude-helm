@@ -6,6 +6,8 @@ const { spawn, spawnSync } = require('child_process');
 const { Indexer } = require('./indexer');
 const preview = require('./preview');
 const agents = require('./agents');
+const share = require('./share');
+const partner = require('./partner');
 const { autoUpdater } = require('electron-updater');
 
 const HOME = app.getPath('home');
@@ -32,6 +34,9 @@ const DEFAULTS = {
   budgetWeekly: 0,     // $ weekly budget (0 = off)
   budgetMonthly: 0,    // $ monthly budget (0 = off)
   notifications: true, // desktop notifications (session finished, budget)
+  notifyAwaiting: true, // desktop ping when a live session is waiting on your input
+  quickTasks: [],      // one-off `claude -p` dispatches (history, capped)
+  partners: [],        // shared partner projects: {projectPath, repo, url, role, autoSync, status…}
   archived: [],        // project paths hidden from the dashboard
   tags: {},            // { projectPath: "client"|"personal"|... }
   clients: {},         // { projectPath: "Client name" } for the billable work-log
@@ -181,6 +186,33 @@ function checkActivity() {
   activeSet = nowActive;
 }
 
+// "Waiting for you" notifier: when a live session finished its turn and sits
+// idle waiting on input, ping the desktop once (per turn) so a session is never
+// stalled just because the window wasn't visible.
+const awaitingNotified = new Map(); // sessionId -> lastTs we notified for
+const AWAITING_MIN_IDLE_MS = 60000; // give yourself a minute to respond naturally first
+function checkAwaiting() {
+  const cfg = loadConfig();
+  if (cfg.notifyAwaiting === false) return;
+  const now = Date.now();
+  let waiting = 0;
+  for (const s of indexer.activeSessions(600000)) { // look back 10 min so slow responses still ping
+    if (!s.awaiting) { awaitingNotified.delete(s.sessionId); continue; }
+    waiting++;
+    const idle = now - s.lastTs;
+    if (idle < AWAITING_MIN_IDLE_MS) continue;
+    if (awaitingNotified.get(s.sessionId) === s.lastTs) continue; // already pinged this turn
+    awaitingNotified.set(s.sessionId, s.lastTs);
+    notify(`${s.name} is waiting on you`, `Claude finished its turn ${Math.round(idle / 60000)} min ago and is waiting for your input.`);
+  }
+  // surface the waiting count in the tray tooltip so a glance at the taskbar tells you
+  if (tray) {
+    try {
+      if (waiting > 0) tray.setToolTip(`Claude Helm — ⏳ ${waiting} session${waiting === 1 ? '' : 's'} waiting on you`);
+    } catch {}
+  }
+}
+
 function checkBudgets() {
   const cfg = loadConfig();
   const checks = [
@@ -294,10 +326,79 @@ function checkRoutines() {
   }
 }
 
+// ---------- quick tasks (one-off `claude -p` dispatched from a project card) ----------
+const runningTasks = new Set();
+const MAX_CONCURRENT_TASKS = 3;
+const TASK_TIMEOUT_MS = 15 * 60 * 1000;
+const MAX_TASK_HISTORY = 30;
+
+function updateTask(id, patch) {
+  const cfg = loadConfig();
+  const t = (cfg.quickTasks || []).find((x) => x.id === id);
+  if (t) { Object.assign(t, patch); saveConfig(cfg); }
+}
+function sendTasks() {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('tasks-updated');
+}
+function runQuickTask({ projectPath, prompt, model, autonomous }) {
+  if (runningTasks.size >= MAX_CONCURRENT_TASKS) {
+    return { ok: false, error: `Already running ${MAX_CONCURRENT_TASKS} tasks — wait for one to finish.` };
+  }
+  const clean = String(prompt || '').trim();
+  if (!clean || !projectPath) return { ok: false, error: 'Empty task.' };
+  const cfg = loadConfig();
+  const id = 'qt' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const task = {
+    id, projectPath, name: projectPath.split(/[\\/]/).pop(),
+    prompt: clean.slice(0, 4000), model: model || 'default', autonomous: !!autonomous,
+    status: 'running', output: '', error: '', ts: Date.now(),
+  };
+  cfg.quickTasks = [task, ...(cfg.quickTasks || [])].slice(0, MAX_TASK_HISTORY);
+  saveConfig(cfg);
+  runningTasks.add(id);
+  sendTasks();
+
+  const bin = resolveClaudeBin();
+  const args = ['-p', clean];
+  if (model && model !== 'default') args.push('--model', model);
+  if (autonomous) args.push('--permission-mode', 'acceptEdits');
+
+  let out = '', err = '', timedOut = false, child;
+  try {
+    child = spawn(bin, args, { cwd: projectPath, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  } catch (e) {
+    runningTasks.delete(id);
+    updateTask(id, { status: 'error', error: friendlyRoutineErr(e.message) });
+    sendTasks();
+    return { ok: false, error: friendlyRoutineErr(e.message) };
+  }
+  const timer = setTimeout(() => { timedOut = true; try { child.kill(); } catch {} }, TASK_TIMEOUT_MS);
+  child.stdout.on('data', (d) => { out += d; if (out.length > 24000) out = out.slice(-24000); });
+  child.stderr.on('data', (d) => { err += d; if (err.length > 8000) err = err.slice(-8000); });
+  child.on('error', (e) => {
+    clearTimeout(timer); runningTasks.delete(id);
+    updateTask(id, { status: 'error', error: friendlyRoutineErr(e.message) }); sendTasks();
+  });
+  child.on('close', (code) => {
+    clearTimeout(timer); runningTasks.delete(id);
+    const status = timedOut ? 'error' : code === 0 ? 'ok' : 'error';
+    updateTask(id, {
+      status, output: out.trim(), done: Date.now(),
+      error: timedOut ? 'Timed out after 15 minutes.' : status === 'error' ? friendlyRoutineErr(err.trim() || `exited with code ${code}`) : '',
+    });
+    sendTasks();
+    const name = task.name;
+    notify(status === 'ok' ? `Task done — ${name}` : `Task failed — ${name}`,
+      (status === 'ok' ? out.trim() : (timedOut ? 'Timed out.' : err.trim())).slice(0, 140) || clean.slice(0, 140));
+  });
+  return { ok: true, id };
+}
+
 function tick() {
   if (!indexer.loaded) return;
   updateTray();
   checkActivity();
+  checkAwaiting();
   checkBudgets();
   checkRoutines();
 }
@@ -601,6 +702,12 @@ ipcMain.handle('daily-recap', async (_e, opts) => {
 });
 
 app.whenReady().then(() => {
+  share.init(app.getPath('userData'));
+  partner.init({
+    home: HOME,
+    loadConfig, saveConfig, notify,
+    onChange: () => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('partners-updated'); },
+  });
   createWindow();
   startWatchers();
   setupAutoUpdate();
@@ -619,7 +726,7 @@ app.whenReady().then(() => {
   });
 });
 
-app.on('before-quit', () => { app.isQuitting = true; try { indexer.flushSync(); } catch {} try { preview.stopAll(); } catch {} });
+app.on('before-quit', () => { app.isQuitting = true; try { indexer.flushSync(); } catch {} try { preview.stopAll(); } catch {} try { share.stopAll(); } catch {} try { partner.stopAll(); } catch {} });
 app.on('will-quit', () => { try { globalShortcut.unregisterAll(); } catch {} });
 
 app.on('window-all-closed', () => {
@@ -1154,7 +1261,29 @@ ipcMain.handle('preview-open', (_e, projectPath, name) => {
 });
 ipcMain.handle('preview-stop', (_e, projectPath) => {
   closePreviewWindow(projectPath);
+  share.stop(projectPath); // a dead preview means the tunnel points at nothing
   return preview.stop(projectPath);
+});
+
+// ---- share a running preview with a client (Cloudflare quick tunnel + QR) ----
+ipcMain.handle('preview-share', async (_e, projectPath) => {
+  try {
+    const info = preview.get(projectPath);
+    if (!info || !info.port) return { ok: false, error: 'Launch the app/site first, then share it.' };
+    const r = await share.start(projectPath, info.port);
+    if (r.ok && r.url) {
+      try {
+        const QRCode = require('qrcode');
+        r.qr = await QRCode.toDataURL(r.url, { margin: 1, width: 220 });
+      } catch {}
+    }
+    return r;
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('preview-share-stop', (_e, projectPath) => share.stop(projectPath));
+ipcMain.handle('share-state', () => share.snapshot());
+share.bus.on('change', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('share-changed', share.snapshot());
 });
 ipcMain.handle('preview-log', (_e, projectPath) => preview.logTail(projectPath));
 ipcMain.handle('set-preview-target', (_e, val) => {
@@ -1235,6 +1364,42 @@ ipcMain.handle('toggle-routine', (_e, id) => {
   if (r) { r.enabled = !r.enabled; saveConfig(cfg); }
   return cfg.routines;
 });
+// ---- partners (live-synced shared projects) ----
+ipcMain.handle('partner-share', (_e, { projectPath, partnerGithub }) => {
+  try { return partner.shareProject(projectPath, partnerGithub); } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('partner-join', (_e, code) => {
+  try { return partner.joinWithCode(code, loadConfig().root); } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('partner-list', () => { try { return partner.list(); } catch { return []; } });
+ipcMain.handle('partner-sync-now', (_e, projectPath) => {
+  try {
+    const entry = partner.list().find((x) => x.projectPath === projectPath);
+    if (!entry) return { ok: false, error: 'Not a partner project.' };
+    partner.syncOne(entry);
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('partner-remove', (_e, projectPath) => partner.remove(projectPath));
+ipcMain.handle('partner-autosync', (_e, { projectPath, on }) => partner.setAutoSync(projectPath, on));
+
+ipcMain.handle('run-quick-task', (_e, args) => {
+  try { return runQuickTask(args || {}); } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('get-quick-tasks', () => loadConfig().quickTasks || []);
+ipcMain.handle('clear-quick-tasks', () => {
+  const cfg = loadConfig();
+  cfg.quickTasks = (cfg.quickTasks || []).filter((t) => t.status === 'running');
+  saveConfig(cfg);
+  return cfg.quickTasks;
+});
+ipcMain.handle('set-notify-awaiting', (_e, on) => {
+  const cfg = loadConfig();
+  cfg.notifyAwaiting = !!on;
+  saveConfig(cfg);
+  return cfg.notifyAwaiting;
+});
+
 ipcMain.handle('run-routine', (_e, id) => {
   const r = (loadConfig().routines || []).find((x) => x.id === id);
   if (r) runRoutine(r);

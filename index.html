@@ -85,6 +85,7 @@
           <div id="awayDigest" class="away-digest hidden"></div>
 
           <div id="ambient" class="ambient hidden"></div>
+          <div id="tasksStrip" class="tasks-strip hidden"></div>
 
           <div id="resumeWrap" class="hidden">
             <div id="resumeList" class="resume-list"></div>
@@ -325,6 +326,14 @@
                 <em>When a session finishes and when you approach/exceed a budget. Also powers the system-tray summary.</em>
               </span>
             </label>
+            <label class="toggle">
+              <input type="checkbox" id="optNotifyAwaiting" />
+              <span class="track"></span>
+              <span class="toggle-text">
+                <strong>"Waiting for you" pings</strong>
+                <em>When a live Claude session finishes its turn and sits idle waiting on your input (after ~1 min), get a desktop ping so it's never stalled.</em>
+              </span>
+            </label>
           </div>
           </div><!-- /usage -->
 
@@ -377,11 +386,12 @@
       <!-- Clients view (billable work-log) -->
       <section id="view-clients" class="view hidden">
         <header class="topbar">
-          <h2 class="view-title">Clients</h2>
-          <span class="topbar-sub">billable work-log · estimated</span>
+          <h2 class="view-title">Clients &amp; Partners</h2>
+          <span class="topbar-sub">billable work-log · live-shared projects</span>
           <button id="exportClients" class="btn ghost" style="margin-left:auto"><span class="ico" data-ico="download"></span> Export CSV</button>
         </header>
         <div class="scroll">
+          <div id="partners-body"></div>
           <div id="clients-body"></div>
         </div>
       </section>

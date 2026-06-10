@@ -79,6 +79,37 @@ contextBridge.exposeInMainWorld('launcher', {
   previewLog: (projectPath) => ipcRenderer.invoke('preview-log', projectPath),
   setPreviewTarget: (val) => ipcRenderer.invoke('set-preview-target', val),
   claudeAccount: () => ipcRenderer.invoke('claude-account'),
+  // ---- quick tasks (headless claude -p dispatch) ----
+  runQuickTask: (args) => ipcRenderer.invoke('run-quick-task', args),
+  getQuickTasks: () => ipcRenderer.invoke('get-quick-tasks'),
+  clearQuickTasks: () => ipcRenderer.invoke('clear-quick-tasks'),
+  setNotifyAwaiting: (on) => ipcRenderer.invoke('set-notify-awaiting', on),
+  onTasksUpdated: (cb) => {
+    const h = () => cb();
+    ipcRenderer.on('tasks-updated', h);
+    return () => ipcRenderer.removeListener('tasks-updated', h);
+  },
+  // ---- preview share (tunnel + QR) ----
+  previewShare: (projectPath) => ipcRenderer.invoke('preview-share', projectPath),
+  previewShareStop: (projectPath) => ipcRenderer.invoke('preview-share-stop', projectPath),
+  shareState: () => ipcRenderer.invoke('share-state'),
+  onShareChanged: (cb) => {
+    const h = (_e, state) => cb(state);
+    ipcRenderer.on('share-changed', h);
+    return () => ipcRenderer.removeListener('share-changed', h);
+  },
+  // ---- partners (live-synced shared projects) ----
+  partnerShare: (projectPath, partnerGithub) => ipcRenderer.invoke('partner-share', { projectPath, partnerGithub }),
+  partnerJoin: (code) => ipcRenderer.invoke('partner-join', code),
+  partnerList: () => ipcRenderer.invoke('partner-list'),
+  partnerSyncNow: (projectPath) => ipcRenderer.invoke('partner-sync-now', projectPath),
+  partnerRemove: (projectPath) => ipcRenderer.invoke('partner-remove', projectPath),
+  partnerAutoSync: (projectPath, on) => ipcRenderer.invoke('partner-autosync', { projectPath, on }),
+  onPartnersUpdated: (cb) => {
+    const h = () => cb();
+    ipcRenderer.on('partners-updated', h);
+    return () => ipcRenderer.removeListener('partners-updated', h);
+  },
   // ---- agent maker ----
   agentsList: (projectPath) => ipcRenderer.invoke('agents-list', projectPath),
   agentSave: (a) => ipcRenderer.invoke('agent-save', a),

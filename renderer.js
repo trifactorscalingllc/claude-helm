@@ -221,11 +221,15 @@ async function openCardMenu(anchor, p) {
     run
       ? { label: 'Open running app/site', icon: 'globe', onClick: () => window.launcher.previewOpen(p.path, p.name) }
       : { label: prof.label, icon: 'globe', onClick: () => launchPreview(p) },
-    ...(run ? [{ label: 'Stop app/site', icon: 'stop', danger: true, onClick: () => stopPreview(p) }] : []),
+    ...(run ? [
+      { label: 'Share with a client…', icon: 'globe', onClick: () => openShareModal(p) },
+      { label: 'Stop app/site', icon: 'stop', danger: true, onClick: () => stopPreview(p) },
+    ] : []),
     { sep: true },
   ] : [];
   const items = [
     { label: 'View stats & sessions', icon: 'chart', onClick: () => openDetail(p) },
+    { label: 'Quick task… (claude -p)', icon: 'bolt', onClick: () => openQuickTaskModal(p) },
     { label: 'Open folder', icon: 'folder', onClick: () => window.launcher.openInExplorer(p.path) },
     { sep: true },
     ...previewItems,
@@ -295,14 +299,16 @@ function paintPreviewBtn(btn, p) {
 function paintDetailLaunch(p) {
   const lb = document.querySelector('#view-detail .d-launch');
   const sb = document.querySelector('#view-detail .d-stop');
+  const shb = document.querySelector('#view-detail .d-share');
   if (!lb) return;
   const prof = previewProfiles[p.path];
-  if (!prof || !prof.launchable) { lb.classList.add('hidden'); if (sb) sb.classList.add('hidden'); return; }
+  if (!prof || !prof.launchable) { lb.classList.add('hidden'); if (sb) sb.classList.add('hidden'); if (shb) shb.classList.add('hidden'); return; }
   const run = previewRunning[p.path];
   lb.classList.remove('hidden');
   lb.innerHTML = run ? `${svg('globe', 14)} Open app/site` : `${svg('globe', 14)} ${prof.label}`;
   lb.title = run ? `Open ${run.url}` : (prof.command || prof.label);
   if (sb) sb.classList.toggle('hidden', !run);
+  if (shb) shb.classList.toggle('hidden', !run);
 }
 function updateDetailPreview() { if (detailProject) paintDetailLaunch(detailProject); }
 
@@ -310,12 +316,115 @@ function updateDetailPreview() { if (detailProject) paintDetailLaunch(detailProj
 function wireDetailLaunch(body, p) {
   const lb = body.querySelector('.d-launch');
   const sb = body.querySelector('.d-stop');
+  const shb = body.querySelector('.d-share');
   if (lb) lb.addEventListener('click', () => {
     const run = previewRunning[p.path];
     if (run && run.url) window.launcher.previewOpen(p.path, p.name); else launchPreview(p);
   });
   if (sb) sb.addEventListener('click', () => stopPreview(p));
+  if (shb) shb.addEventListener('click', () => openShareModal(p));
   paintDetailLaunch(p);
+}
+
+// ---------- generic modal (dynamic, reuses .modal styles) ----------
+function popModal(innerHtml) {
+  const ov = document.createElement('div');
+  ov.className = 'modal-overlay';
+  ov.innerHTML = `<div class="modal">${innerHtml}</div>`;
+  document.body.appendChild(ov);
+  const close = () => { ov.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  ov.addEventListener('click', (e) => { if (e.target === ov) close(); });
+  document.addEventListener('keydown', onKey);
+  return { el: ov, close };
+}
+
+// ---------- quick tasks (dispatch claude -p from a card) ----------
+function openQuickTaskModal(p) {
+  const { el, close } = popModal(`
+    <h3>Quick task — ${escapeHtml(p.name)}</h3>
+    <p class="modal-sub">Runs <code>claude -p</code> headless in this project. You'll get a desktop notification when it finishes; output lands in the Tasks strip on Home.</p>
+    <textarea id="qtPrompt" rows="4" placeholder="e.g. fix the mobile nav overlap on the homepage" spellcheck="false" style="width:100%"></textarea>
+    <div style="display:flex;gap:10px;align-items:center;margin-top:12px">
+      <select id="qtModel" class="filter-sel">
+        <option value="default">Default model</option>
+        <option value="opus">Opus</option>
+        <option value="sonnet">Sonnet</option>
+        <option value="haiku">Haiku</option>
+      </select>
+      <label style="display:flex;align-items:center;gap:6px;font-size:12.5px"><input type="checkbox" id="qtAuto" checked /> Allow file edits (acceptEdits)</label>
+    </div>
+    <div class="modal-actions">
+      <button class="btn ghost qt-cancel">Cancel</button>
+      <button class="btn primary qt-run">${svg('bolt', 14)} Dispatch</button>
+    </div>`);
+  el.querySelector('#qtPrompt').focus();
+  el.querySelector('.qt-cancel').addEventListener('click', close);
+  el.querySelector('.qt-run').addEventListener('click', async () => {
+    const prompt = el.querySelector('#qtPrompt').value.trim();
+    if (!prompt) return;
+    const r = await window.launcher.runQuickTask({
+      projectPath: p.path, prompt,
+      model: el.querySelector('#qtModel').value,
+      autonomous: el.querySelector('#qtAuto').checked,
+    });
+    close();
+    if (r && r.ok) showStatus(`Task dispatched to ${p.name} — you'll be notified when it's done.`, 'ok');
+    else showStatus((r && r.error) || 'Could not start the task.', 'warn');
+    renderTasksStrip();
+  });
+}
+
+// Home strip showing recent quick tasks (running + finished); click → full output.
+async function renderTasksStrip() {
+  const host = $('tasksStrip');
+  if (!host) return;
+  const tasks = await window.launcher.getQuickTasks();
+  if (!tasks || !tasks.length) { host.classList.add('hidden'); host.innerHTML = ''; return; }
+  host.classList.remove('hidden');
+  host.innerHTML = `<span class="ts-label">${svg('bolt', 13)} Tasks</span>` + tasks.slice(0, 6).map((t, i) => `
+    <button class="ts-chip ${t.status}" data-i="${i}" title="${escapeHtml(t.prompt)}">
+      ${t.status === 'running' ? '<span class="ts-spin"></span>' : t.status === 'ok' ? '✓' : '✕'} ${escapeHtml(t.name)}
+    </button>`).join('') +
+    `<button class="ts-clear" title="Clear finished tasks">clear</button>`;
+  host.querySelectorAll('.ts-chip').forEach((b) => b.addEventListener('click', () => {
+    const t = tasks[Number(b.dataset.i)];
+    popModal(`
+      <h3>${t.status === 'running' ? 'Running' : t.status === 'ok' ? 'Done' : 'Failed'} — ${escapeHtml(t.name)}</h3>
+      <p class="modal-sub">${escapeHtml(t.prompt)}</p>
+      <pre class="qt-output">${escapeHtml(t.output || t.error || (t.status === 'running' ? 'Working…' : 'No output.'))}</pre>
+      <div class="modal-actions"><button class="btn ghost qt-close">Close</button></div>`)
+      .el.querySelector('.qt-close').addEventListener('click', (e) => e.target.closest('.modal-overlay').remove());
+  }));
+  const clear = host.querySelector('.ts-clear');
+  if (clear) clear.addEventListener('click', async () => { await window.launcher.clearQuickTasks(); renderTasksStrip(); });
+}
+
+// ---------- share a running preview (tunnel + QR) ----------
+async function openShareModal(p) {
+  const { el, close } = popModal(`
+    <h3>Share ${escapeHtml(p.name)} with a client</h3>
+    <p class="modal-sub">Creating a public link to your locally-running preview…</p>
+    <div class="share-body"><p class="empty">Starting tunnel (first time downloads a small helper)…</p></div>
+    <div class="modal-actions"><button class="btn ghost sh-close">Close</button></div>`);
+  el.querySelector('.sh-close').addEventListener('click', close);
+  const r = await window.launcher.previewShare(p.path);
+  const body = el.querySelector('.share-body');
+  if (!el.isConnected) return;
+  if (!r || !r.ok) {
+    body.innerHTML = `<p class="empty">${escapeHtml((r && r.error) || 'Could not start the tunnel.')}</p>`;
+    return;
+  }
+  body.innerHTML = `
+    ${r.qr ? `<img class="share-qr" src="${r.qr}" alt="QR code" />` : ''}
+    <div class="share-link"><code>${escapeHtml(r.url)}</code></div>
+    <p class="modal-sub" style="margin-top:10px">Anyone with the link sees your live preview while it's running. The link dies when you stop the preview or the share.</p>
+    <div style="display:flex;gap:8px;justify-content:center">
+      <button class="btn primary sh-copy">Copy link</button>
+      <button class="btn ghost sh-stop">Stop sharing</button>
+    </div>`;
+  body.querySelector('.sh-copy').addEventListener('click', async () => { await window.launcher.copyText(r.url); showStatus('Share link copied.', 'ok'); });
+  body.querySelector('.sh-stop').addEventListener('click', async () => { await window.launcher.previewShareStop(p.path); close(); showStatus('Share stopped.', 'ok'); });
 }
 
 // Update every visible row's preview button in place (called on preview-changed).
@@ -481,7 +590,103 @@ function fmtMonth(ym) {
 function fmtHours(ms) { return (ms / 3600000).toFixed(1) + ' h'; }
 let lastClientReport = null;
 
+// ---------- partners (live-shared projects) ----------
+function partnerStateChip(live) {
+  const s = (live && live.state) || 'idle';
+  const map = { synced: ['synced', 'ok'], conflict: ['conflict — needs you', 'warn'], error: ['sync error', 'warn'], idle: ['waiting for first sync', ''] };
+  const [label, cls] = map[s] || [s, ''];
+  return `<span class="pt-state ${cls}" title="${escapeHtml((live && live.detail) || '')}">${label}${live && live.lastSync ? ' · ' + relTime(live.lastSync) : ''}</span>`;
+}
+
+async function loadPartners() {
+  const host = $('partners-body');
+  if (!host) return;
+  const list = await window.launcher.partnerList();
+  const rows = (list || []).map((e, i) => `
+    <div class="pt-row" data-i="${i}">
+      <div class="pt-main">
+        <div class="pt-name">${escapeHtml(e.name)} <span class="tag ${e.role === 'owner' ? 'tagchip' : 'ext'}">${e.role === 'owner' ? 'you shared' : 'shared with you'}</span></div>
+        <div class="pt-sub">${partnerStateChip(e.live)} · auto-sync ${e.autoSync ? 'on' : 'off'}</div>
+      </div>
+      ${e.role === 'owner' ? `<button class="btn ghost btn-xs pt-code">Copy code</button>` : ''}
+      <button class="btn ghost btn-xs pt-sync">Sync now</button>
+      <button class="btn ghost btn-xs pt-auto">${e.autoSync ? 'Pause' : 'Resume'}</button>
+      <button class="btn ghost btn-xs pt-remove" title="Stops syncing — files stay on disk">Stop</button>
+    </div>`).join('');
+  host.innerHTML = `<div class="panel">
+    <div class="panel-title">Partners <span class="panel-hint">live two-way sync · files + Claude context</span></div>
+    <p class="panel-sub">Share a project and your partner gets the files <strong>and your Claude context</strong> on their machine — both sides stay in sync automatically (private GitHub repo as the pipe). Clients see previews; partners get admin.</p>
+    ${rows || '<p class="panel-sub">No partner projects yet.</p>'}
+    <div class="pt-actions">
+      <button class="btn primary" id="ptShare">${svg('user', 14)} Share a project…</button>
+      <button class="btn ghost" id="ptJoin">Join with a code…</button>
+    </div>
+  </div>`;
+  host.querySelectorAll('.pt-row').forEach((row) => {
+    const e = list[Number(row.dataset.i)];
+    const code = row.querySelector('.pt-code');
+    if (code) code.addEventListener('click', async () => { await window.launcher.copyText(e.code); showStatus('Partner code copied — send it to your partner.', 'ok'); });
+    row.querySelector('.pt-sync').addEventListener('click', async () => { showStatus(`Syncing ${e.name}…`, 'ok'); await window.launcher.partnerSyncNow(e.projectPath); loadPartners(); });
+    row.querySelector('.pt-auto').addEventListener('click', async () => { await window.launcher.partnerAutoSync(e.projectPath, !e.autoSync); loadPartners(); });
+    row.querySelector('.pt-remove').addEventListener('click', async () => { await window.launcher.partnerRemove(e.projectPath); showStatus('Stopped syncing. The files are still on disk.', 'ok'); loadPartners(); });
+  });
+  $('ptShare').addEventListener('click', openPartnerShareModal);
+  $('ptJoin').addEventListener('click', openPartnerJoinModal);
+}
+
+function openPartnerShareModal() {
+  const all = [...projects, ...externalProjects];
+  const { el, close } = popModal(`
+    <h3>Share a project with a partner</h3>
+    <p class="modal-sub">Creates a private GitHub repo, pushes the project + your Claude context, and gives you a partner code. Needs the GitHub CLI (<code>gh</code>) signed in.</p>
+    <select id="ptProject" class="filter-sel" style="width:100%">${all.map((p) => `<option value="${escapeHtml(p.path)}">${escapeHtml(p.name)}</option>`).join('')}</select>
+    <input id="ptGithub" type="text" placeholder="Partner's GitHub username (optional — grants repo access)" autocomplete="off" spellcheck="false" style="margin-top:10px" />
+    <div class="modal-actions">
+      <button class="btn ghost pt-cancel">Cancel</button>
+      <button class="btn primary pt-go">Share</button>
+    </div>`);
+  el.querySelector('.pt-cancel').addEventListener('click', close);
+  el.querySelector('.pt-go').addEventListener('click', async (ev) => {
+    const btn = ev.currentTarget; btn.disabled = true; btn.textContent = 'Sharing… (can take a minute)';
+    const r = await window.launcher.partnerShare(el.querySelector('#ptProject').value, el.querySelector('#ptGithub').value.trim());
+    close();
+    if (!r || !r.ok) { showStatus((r && r.error) || 'Share failed.', 'warn'); return; }
+    const m = popModal(`
+      <h3>Partner code ready</h3>
+      <p class="modal-sub">Send this code to your partner. In their Claude Helm: Clients &amp; Partners → <strong>Join with a code</strong>.${r.invited ? ` GitHub access granted to <strong>${escapeHtml(r.invited)}</strong>.` : ' If you left their GitHub username blank, add them as a collaborator on the repo so the clone works.'}</p>
+      <textarea readonly rows="3" style="width:100%;font-family:monospace;font-size:11px">${escapeHtml(r.code)}</textarea>
+      <div class="modal-actions">
+        <button class="btn primary pt-copy">Copy code</button>
+        <button class="btn ghost pt-done">Done</button>
+      </div>`);
+    m.el.querySelector('.pt-copy').addEventListener('click', async () => { await window.launcher.copyText(r.code); showStatus('Partner code copied.', 'ok'); });
+    m.el.querySelector('.pt-done').addEventListener('click', m.close);
+    loadPartners();
+  });
+}
+
+function openPartnerJoinModal() {
+  const { el, close } = popModal(`
+    <h3>Join a partner project</h3>
+    <p class="modal-sub">Paste the code your partner sent. The project (files + Claude context) clones into your projects folder and stays in sync automatically.</p>
+    <textarea id="ptCode" rows="3" placeholder="HELM-…" style="width:100%;font-family:monospace;font-size:11px"></textarea>
+    <div class="modal-actions">
+      <button class="btn ghost pt-cancel">Cancel</button>
+      <button class="btn primary pt-go">Join</button>
+    </div>`);
+  el.querySelector('#ptCode').focus();
+  el.querySelector('.pt-cancel').addEventListener('click', close);
+  el.querySelector('.pt-go').addEventListener('click', async (ev) => {
+    const btn = ev.currentTarget; btn.disabled = true; btn.textContent = 'Cloning…';
+    const r = await window.launcher.partnerJoin(el.querySelector('#ptCode').value);
+    close();
+    if (r && r.ok) { showStatus(`Joined ${r.name} — it's in your projects now and will stay in sync.`, 'ok'); await loadProjects(); loadPartners(); }
+    else showStatus((r && r.error) || 'Could not join.', 'warn');
+  });
+}
+
 async function loadClients() {
+  loadPartners();
   const body = $('clients-body');
   body.innerHTML = '<p class="empty">Loading…</p>';
   const rep = await window.launcher.clientReport();
@@ -755,6 +960,7 @@ function syncSettingsUI() {
   $('optBudgetWeekly').value = cfg.budgetWeekly || '';
   $('optBudgetMonthly').value = cfg.budgetMonthly || '';
   $('optNotifications').checked = cfg.notifications !== false;
+  if ($('optNotifyAwaiting')) $('optNotifyAwaiting').checked = cfg.notifyAwaiting !== false;
   $('optRedact').checked = !!cfg.redact;
   $('optOpenAtLogin').checked = !!cfg.openAtLogin;
   $('optStartHidden').checked = !!cfg.startHidden;
@@ -1396,6 +1602,7 @@ async function openDetail(p) {
       <button class="btn primary d-open">${svg('terminal', 15)} Open in Claude</button>
       ${lastId ? `<button class="btn ghost d-resume">${svg('message', 14)} Resume last session</button>` : ''}
       <button class="btn ghost d-launch hidden"></button>
+      <button class="btn ghost d-share hidden" title="Share the running preview with a client (public link + QR)">${svg('globe', 14)} Share</button>
       <button class="btn ghost d-stop hidden" title="Stop the running app/site">${svg('stop', 14)} Stop</button>
       <button class="icon-btn d-folder" title="Open folder in Explorer">${svg('folder', 16)}</button>
     </div>
@@ -2299,6 +2506,9 @@ async function init() {
   $('optBudgetWeekly').addEventListener('change', async (e) => { const r = await window.launcher.setBudget({ weekly: e.target.value }); cfg.budgetWeekly = r.budgetWeekly; showStatus('Weekly budget saved.', 'ok'); });
   $('optBudgetMonthly').addEventListener('change', async (e) => { const r = await window.launcher.setBudget({ monthly: e.target.value }); cfg.budgetMonthly = r.budgetMonthly; showStatus('Monthly budget saved.', 'ok'); });
   $('optNotifications').addEventListener('change', async (e) => { cfg.notifications = await window.launcher.setNotifications(e.target.checked); });
+  if ($('optNotifyAwaiting')) $('optNotifyAwaiting').addEventListener('change', async (e) => {
+    cfg.notifyAwaiting = await window.launcher.setNotifyAwaiting(e.target.checked);
+  });
   $('optRedact').addEventListener('change', async (e) => { cfg.redact = await window.launcher.setRedact(e.target.checked); applyRedact(cfg.redact); });
   $('optOpenAtLogin').addEventListener('change', async (e) => {
     const r = await window.launcher.setLoginItem({ openAtLogin: e.target.checked });
@@ -2376,6 +2586,11 @@ async function init() {
     else if (state === 'current') { hideUpdateBanner(); if (checkedManually && ustate) ustate.textContent = "You're on the latest version."; checkedManually = false; }
     else if (state === 'error') { toast.classList.add('hidden'); if (checkedManually && ustate) ustate.textContent = "Couldn't check right now — try again shortly."; checkedManually = false; }
   });
+
+  // quick-task + partner live updates
+  window.launcher.onTasksUpdated(() => renderTasksStrip());
+  window.launcher.onPartnersUpdated(() => { if (!$('view-clients').classList.contains('hidden')) loadPartners(); });
+  renderTasksStrip();
 
   // a preview started/stopped/exited → update the running map and repaint Launch buttons
   window.launcher.onPreviewChanged((state) => {

@@ -265,6 +265,34 @@ body.has-update-banner .app { height: calc(100vh - 46px); margin-top: 46px; }
 .acct-empty { color: var(--muted); font-size: 13px; }
 body.redact .acct-v { filter: blur(5px); }
 
+/* ---- Tasks strip (quick claude -p dispatches) ---- */
+.tasks-strip { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin: 8px 0 4px; }
+.tasks-strip.hidden { display: none; }
+.ts-label { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.ts-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line-2); background: var(--paper); color: var(--ink); cursor: pointer; }
+.ts-chip:hover { border-color: var(--clay); }
+.ts-chip.ok { border-color: #2f8f5b55; color: #2f8f5b; }
+.ts-chip.error { border-color: #c0563f66; color: #c0563f; }
+.ts-spin { width: 9px; height: 9px; border: 2px solid var(--clay); border-top-color: transparent; border-radius: 50%; animation: tsspin 0.8s linear infinite; }
+@keyframes tsspin { to { transform: rotate(360deg); } }
+.ts-clear { border: none; background: none; color: var(--muted); font-size: 11px; cursor: pointer; text-decoration: underline dotted; }
+.qt-output { max-height: 320px; overflow: auto; background: var(--cloud); border: 1px solid var(--line); border-radius: 7px; padding: 12px; font-size: 12px; white-space: pre-wrap; word-break: break-word; text-align: left; }
+
+/* ---- Share modal ---- */
+.share-qr { display: block; margin: 0 auto 12px; border-radius: 8px; background: #fff; padding: 6px; }
+.share-link { text-align: center; }
+.share-link code { font-size: 12.5px; word-break: break-all; }
+
+/* ---- Partners ---- */
+.pt-row { display: flex; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.pt-row:last-of-type { border-bottom: none; }
+.pt-main { flex: 1; min-width: 0; }
+.pt-name { font-weight: 600; font-size: 13.5px; display: flex; align-items: center; gap: 8px; }
+.pt-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.pt-state.ok { color: #2f8f5b; font-weight: 600; }
+.pt-state.warn { color: #c0563f; font-weight: 600; }
+.pt-actions { display: flex; gap: 8px; margin-top: 14px; }
+
 /* ---- Agents view (agent maker) ---- */
 .agents-layout { display: grid; grid-template-columns: minmax(220px, 320px) 1fr; gap: 16px; align-items: start; }
 @media (max-width: 880px) { .agents-layout { grid-template-columns: 1fr; } }
