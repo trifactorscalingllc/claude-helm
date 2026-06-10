@@ -1380,32 +1380,74 @@ async function searchMemory(q) {
   const encoded = HOME.replace(/[\\/:]/g, '-');
   const memDir = path.join(CLAUDE_PROJECTS_DIR, encoded, 'memory');
   const out = [];
+  // word-AND: every query word must appear somewhere (description OR body),
+  // so multi-word descriptions match even when the words aren't adjacent
+  const tokens = q.split(/\s+/).filter(Boolean);
+  const matches = (hay) => tokens.every((t) => hay.includes(t));
   let files;
   try { files = await fsp.readdir(memDir); } catch { return out; }
   for (const f of files) {
     if (!f.endsWith('.md') || f === 'MEMORY.md') continue;
     let text;
     try { text = await fsp.readFile(path.join(memDir, f), 'utf8'); } catch { continue; }
-    if (!text.toLowerCase().includes(q)) continue;
+    if (!matches(text.toLowerCase())) continue;
     const mem = parseMemory(text);
     const hay = (mem.description + ' ' + mem.body).toLowerCase();
-    if (!hay.includes(q)) continue;
+    if (!matches(hay)) continue;
     out.push({
       title: mem.description || mem.name || f,
       type: mem.type || (f.match(/^(feedback|project|reference|user)/) || [])[1] || 'other',
       body: mem.body,
-      snippet: snippet((mem.body || mem.description || '').replace(/\s+/g, ' '), q, 200),
+      snippet: snippet((mem.body || mem.description || '').replace(/\s+/g, ' '), tokens[0], 200),
     });
   }
   // also the global CLAUDE.md
   try {
     const cm = await fsp.readFile(path.join(HOME, '.claude', 'CLAUDE.md'), 'utf8');
-    if (cm.toLowerCase().includes(q)) {
-      out.push({ title: 'Global instructions (CLAUDE.md)', type: 'instructions', body: cm.trim(), snippet: snippet(cm.replace(/\s+/g, ' '), q, 200) });
+    if (matches(cm.toLowerCase())) {
+      out.push({ title: 'Global instructions (CLAUDE.md)', type: 'instructions', body: cm.trim(), snippet: snippet(cm.replace(/\s+/g, ' '), tokens[0], 200) });
     }
   } catch {}
   return out;
 }
+
+// Search projects by ANY description: name, tag, client, your notes, README first
+// paragraph, and recent session titles. Word-AND matching — every word in the query
+// must appear somewhere in the project's combined text (order doesn't matter).
+ipcMain.handle('search-projects', async (_e, query, list) => {
+  const q = String(query || '').trim().toLowerCase();
+  if (q.length < 2 || !Array.isArray(list)) return [];
+  const tokens = q.split(/\s+/).filter(Boolean);
+  const cfg = loadConfig();
+  const out = [];
+  for (const p of list.slice(0, 200)) {
+    if (!p || !p.path) continue;
+    let desc = '';
+    for (const name of ['README.md', 'readme.md', 'CLAUDE.md']) {
+      try { desc = firstParagraph(await fsp.readFile(path.join(p.path, name), 'utf8')); if (desc) break; } catch {}
+    }
+    const m = indexer.metricsFor(p.path);
+    const titles = m ? Object.values(m.sessions).filter((s) => s.title)
+      .sort((a, b) => b.lastTs - a.lastTs).slice(0, 8).map((s) => s.title) : [];
+    const note = (cfg.notes || {})[p.path] || '';
+    const tag = (cfg.tags || {})[p.path] || '';
+    const client = (cfg.clients || {})[p.path] || '';
+    const hay = [p.name, tag, client, note, desc, ...titles].join(' \n ').toLowerCase();
+    if (!tokens.every((t) => hay.includes(t))) continue;
+    // surface WHERE it matched so the result is self-explanatory
+    let matched = '';
+    if (tokens.some((t) => p.name.toLowerCase().includes(t))) matched = desc || note || titles[0] || '';
+    else if (tokens.some((t) => desc.toLowerCase().includes(t))) matched = desc;
+    else if (tokens.some((t) => note.toLowerCase().includes(t))) matched = 'Note: ' + note;
+    else {
+      const hit = titles.find((t) => tokens.some((tok) => t.toLowerCase().includes(tok)));
+      matched = hit ? 'Session: ' + hit : desc || note || '';
+    }
+    out.push({ path: p.path, name: p.name, tag, client, desc: String(matched).slice(0, 220) });
+    if (out.length >= 12) break;
+  }
+  return out;
+});
 
 ipcMain.handle('search-transcripts', async (_e, query, filters) => {
   const q = String(query || '').trim().toLowerCase();

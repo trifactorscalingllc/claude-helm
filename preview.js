@@ -38,55 +38,78 @@ const MIME = {
   '.pdf': 'application/pdf', '.xml': 'application/xml',
 };
 
-const STATIC_DIRS = ['', 'public', 'dist', 'build', 'out', 'site', 'www', 'docs', 'src'];
-
 function readJSON(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
 }
 
-function detectPackageManager(projectPath) {
-  if (fs.existsSync(path.join(projectPath, 'pnpm-lock.yaml'))) return 'pnpm';
-  if (fs.existsSync(path.join(projectPath, 'yarn.lock'))) return 'yarn';
-  if (fs.existsSync(path.join(projectPath, 'bun.lockb'))) return 'bun';
+function detectPackageManager(dir) {
+  if (fs.existsSync(path.join(dir, 'pnpm-lock.yaml'))) return 'pnpm';
+  if (fs.existsSync(path.join(dir, 'yarn.lock'))) return 'yarn';
+  if (fs.existsSync(path.join(dir, 'bun.lockb'))) return 'bun';
   return 'npm';
 }
 
-// Find an index.html (or a lone *.html) inside one of the common web roots.
-function findStaticEntry(projectPath) {
-  for (const d of STATIC_DIRS) {
-    const dir = d ? path.join(projectPath, d) : projectPath;
-    let st; try { st = fs.statSync(dir); } catch { continue; }
-    if (!st.isDirectory()) continue;
-    const idx = path.join(dir, 'index.html');
-    if (fs.existsSync(idx)) return { dir, file: 'index.html' };
-    // fall back to a single html file at the root level only
-    if (d === '') {
-      let names; try { names = fs.readdirSync(dir); } catch { names = []; }
-      const html = names.filter((n) => /\.html?$/i.test(n)).sort();
-      if (html.length) return { dir, file: html[0] };
+// Directories that never contain the user's launchable app.
+const SKIP_DIRS = new Set(['node_modules', 'vendor', 'venv', '.venv', '__pycache__', 'coverage', 'tmp', 'temp']);
+
+// Walk the project (breadth-first, shallow-wins) looking for anything launchable:
+//   • a package.json with a dev/start/serve/preview script  → "server" app, cwd = that folder
+//   • an index.html anywhere                                 → "static" site, served from its folder
+//   • failing both, ANY *.html file                          → "static", served from its folder
+// Depth-limited and junk-dir-pruned so it stays cheap even on big repos.
+function scanLaunchable(projectPath, maxDepth = 3) {
+  let server = null, index = null, anyHtml = null;
+  const queue = [{ dir: projectPath, depth: 0 }];
+  while (queue.length) {
+    const { dir, depth } = queue.shift();
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+    for (const e of entries) {
+      if (e.isDirectory()) {
+        if (e.name.startsWith('.') || SKIP_DIRS.has(e.name)) continue;
+        if (depth < maxDepth) queue.push({ dir: path.join(dir, e.name), depth: depth + 1 });
+        continue;
+      }
+      if (!e.isFile()) continue;
+      if (e.name === 'package.json' && !server) {
+        const pkg = readJSON(path.join(dir, 'package.json'));
+        const scripts = (pkg && pkg.scripts) || {};
+        const scriptName = ['dev', 'start', 'serve', 'preview'].find((s) => scripts[s]);
+        if (scriptName) server = { dir, scriptName, depth };
+      } else if (/^index\.html?$/i.test(e.name)) {
+        if (!index) index = { dir, file: e.name, depth };
+      } else if (/\.html?$/i.test(e.name)) {
+        if (!anyHtml) anyHtml = { dir, file: e.name, depth };
+      }
     }
+    // BFS is shallowest-first — once a server app is found nothing deeper can outrank it
+    if (server) break;
   }
-  return null;
+  return { server, index, anyHtml };
 }
 
-// Lightweight profile used to decide whether to show a Launch button. Cheap: a few fs reads.
+// Profile used to decide whether to show a Launch button (and what it runs).
+// Shallower wins (a root index.html is the project's face, not a nested tool);
+// at equal depth a dev-server app outranks a static page.
 function detect(projectPath) {
   try {
-    const pkg = readJSON(path.join(projectPath, 'package.json'));
-    const scripts = (pkg && pkg.scripts) || {};
-    const scriptName = ['dev', 'start', 'serve', 'preview'].find((s) => scripts[s]);
-    if (scriptName) {
-      const pm = detectPackageManager(projectPath);
+    const { server, index, anyHtml } = scanLaunchable(projectPath);
+    if (server && index && index.depth < server.depth) {
+      return { launchable: true, type: 'static', label: 'Launch site', dir: index.dir, file: index.file };
+    }
+    if (server) {
+      const pm = detectPackageManager(server.dir);
       const runner = pm === 'npm' ? 'npm run' : pm === 'yarn' ? 'yarn' : pm === 'bun' ? 'bun run' : 'pnpm';
       return {
         launchable: true,
         type: 'server',
         label: 'Launch app',
-        script: scriptName,
-        command: `${runner} ${scriptName}`,
+        script: server.scriptName,
+        cwd: server.dir,
+        command: `${runner} ${server.scriptName}`,
       };
     }
-    const stat = findStaticEntry(projectPath);
+    const stat = index || anyHtml;
     if (stat) {
       return { launchable: true, type: 'static', label: 'Launch site', dir: stat.dir, file: stat.file };
     }
@@ -184,13 +207,14 @@ async function startStatic(projectPath, name, prof, target) {
 // ---- dev server ----
 function startServer(projectPath, name, prof, target) {
   const env = { ...process.env, BROWSER: 'none', FORCE_COLOR: '1', npm_config_yes: 'true' };
+  const cwd = prof.cwd || projectPath; // the dev command runs where its package.json lives
   let child;
   try {
     if (process.platform === 'win32') {
-      child = spawn(prof.command, { cwd: projectPath, env, shell: true, windowsHide: true });
+      child = spawn(prof.command, { cwd, env, shell: true, windowsHide: true });
     } else {
       // own process group so we can kill the whole tree later
-      child = spawn('/bin/sh', ['-c', prof.command], { cwd: projectPath, env, detached: true });
+      child = spawn('/bin/sh', ['-c', prof.command], { cwd, env, detached: true });
     }
   } catch (err) {
     return { ok: false, error: err.message };

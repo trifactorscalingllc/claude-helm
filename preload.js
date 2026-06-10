@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld('launcher', {
   getContext: () => ipcRenderer.invoke('get-context'),
   openMemoryFolder: () => ipcRenderer.invoke('open-memory-folder'),
   searchTranscripts: (query, filters) => ipcRenderer.invoke('search-transcripts', query, filters),
+  searchProjects: (query, list) => ipcRenderer.invoke('search-projects', query, list),
   readTranscript: (args) => ipcRenderer.invoke('read-transcript', args),
   branchSession: (cwd, sessionId) => ipcRenderer.invoke('branch-session', cwd, sessionId),
   resumeSession: (cwd, sessionId) => ipcRenderer.invoke('resume-session', cwd, sessionId),

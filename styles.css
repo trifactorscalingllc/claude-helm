@@ -727,6 +727,12 @@ select:focus { outline: none; border-color: var(--clay); }
   padding: 12px 14px; margin-bottom: 10px; cursor: pointer; transition: border-color 0.12s;
 }
 .sresult:hover { border-color: var(--clay); }
+.proj-hit {
+  background: var(--paper); border: 1px solid var(--line); border-radius: 7px;
+  padding: 12px 14px; margin-bottom: 10px; cursor: pointer; transition: border-color 0.12s;
+}
+.proj-hit:hover { border-color: var(--clay); }
+.proj-hit .ph-open { margin-left: auto; }
 .sr-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
 .sr-proj { font-weight: 600; font-size: 13px; color: var(--ink); }
 .sr-role { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; padding: 1px 7px; border-radius: 20px; border: 1px solid var(--line-2); color: var(--muted); }

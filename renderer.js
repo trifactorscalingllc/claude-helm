@@ -1065,14 +1065,33 @@ async function runSearch(q) {
     return;
   }
   body.innerHTML = '<p class="empty">Searching…</p>';
-  const { results, contexts = [], scanned, truncated } = await window.launcher.searchTranscripts(q, searchFilters);
-  if (!results.length && !contexts.length) {
-    body.innerHTML = `<p class="empty">No matches for "${escapeHtml(q)}" in your conversations or context.</p>`;
+  const projList = [...projects, ...externalProjects].map((p) => ({ path: p.path, name: p.name }));
+  const [{ results, contexts = [], scanned, truncated }, projHits] = await Promise.all([
+    window.launcher.searchTranscripts(q, searchFilters),
+    searchFilters.project ? Promise.resolve([]) : window.launcher.searchProjects(q, projList),
+  ]);
+  if (!results.length && !contexts.length && !projHits.length) {
+    body.innerHTML = `<p class="empty">No matches for "${escapeHtml(q)}" in your projects, conversations, or context.</p>`;
     return;
   }
-  const rx = new RegExp('(' + q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'ig');
+  // highlight every query word, not just the exact phrase
+  const words = q.split(/\s+/).filter(Boolean).map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const rx = new RegExp('(' + words.join('|') + ')', 'ig');
   const hl = (s) => escapeHtml(s).replace(rx, '<mark>$1</mark>');
   let html = '';
+
+  if (projHits.length) {
+    html += `<div class="section-head">${svg('grid', 15)} Projects <span class="count">${projHits.length}</span></div>`;
+    html += projHits.map((p, i) => `<div class="proj-hit" data-i="${i}">
+      <div class="sr-head">
+        <span class="sr-proj">${hl(p.name)}</span>
+        ${p.tag ? `<span class="tag tagchip">${escapeHtml(p.tag)}</span>` : ''}
+        ${p.client ? `<span class="sr-role">${escapeHtml(p.client)}</span>` : ''}
+        <button class="btn primary btn-xs ph-open">${svg('terminal', 13)} Open</button>
+      </div>
+      ${p.desc ? `<div class="sr-snip">${hl(p.desc)}</div>` : ''}
+    </div>`).join('');
+  }
 
   if (contexts.length) {
     html += `<div class="section-head">${svg('brain', 15)} Context & memory <span class="count">${contexts.length}</span></div>`;
@@ -1100,6 +1119,16 @@ async function runSearch(q) {
   }
 
   body.innerHTML = html;
+  // a project hit pulls the project right up: row → details, Open → launch in Claude
+  body.querySelectorAll('.proj-hit[data-i]').forEach((el) => {
+    const p = projHits[Number(el.dataset.i)];
+    el.addEventListener('click', (e) => { if (!e.target.closest('button')) openDetail({ name: p.name, path: p.path }); });
+    el.querySelector('.ph-open').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const r = await window.launcher.openProject(p.path);
+      await handleLaunchResult(r, p.name);
+    });
+  });
   body.querySelectorAll('.ctx-row').forEach((row) =>
     row.addEventListener('click', () => row.parentElement.classList.toggle('open')));
   body.querySelectorAll('.sresult[data-i]').forEach((el) => {
