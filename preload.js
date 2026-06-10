@@ -104,6 +104,12 @@ contextBridge.exposeInMainWorld('launcher', {
   partnerList: () => ipcRenderer.invoke('partner-list'),
   partnerSyncNow: (projectPath) => ipcRenderer.invoke('partner-sync-now', projectPath),
   partnerRemove: (projectPath) => ipcRenderer.invoke('partner-remove', projectPath),
+  partnerSelfTest: () => ipcRenderer.invoke('partner-self-test'),
+  onSelfTestProgress: (cb) => {
+    const h = (_e, entry) => cb(entry);
+    ipcRenderer.on('selftest-progress', h);
+    return () => ipcRenderer.removeListener('selftest-progress', h);
+  },
   partnerAutoSync: (projectPath, on) => ipcRenderer.invoke('partner-autosync', { projectPath, on }),
   onPartnersUpdated: (cb) => {
     const h = () => cb();

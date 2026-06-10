@@ -107,6 +107,63 @@ function importContext(projectPath) {
   } catch {}
 }
 
+// ---- "everything syncs" guarantees ----
+// 1. Projects with no .gitignore would sync node_modules and other bulk junk on the
+//    very first commit — seed a baseline so auto-sync stays fast and reliable.
+// 2. .env-style files are usually gitignored, but a partner's copy is useless without
+//    them — the user's explicit choice is that EVERYTHING syncs (private repo), so we
+//    force-add env files past .gitignore on every sync.
+const BASELINE_GITIGNORE = [
+  'node_modules/', 'dist/win-unpacked/', '__pycache__/', '*.pyc', 'venv/', '.venv/',
+  '*.log', '.DS_Store', 'Thumbs.db',
+].join('\n') + '\n';
+
+// Auto-commits need a git identity; many machines never set the global one (this
+// exact bug surfaced in testing). Seed a repo-local identity from the signed-in
+// Claude account, falling back to a neutral one.
+function ensureGitIdentity(projectPath) {
+  if (git(projectPath, ['config', 'user.email']).out) return;
+  let name = 'Claude Helm', email = 'helm@localhost';
+  try {
+    const o = (JSON.parse(fs.readFileSync(path.join(env.home, '.claude.json'), 'utf8')) || {}).oauthAccount || {};
+    if (o.displayName) name = o.displayName;
+    if (o.emailAddress) email = o.emailAddress;
+  } catch {}
+  git(projectPath, ['config', 'user.name', name]);
+  git(projectPath, ['config', 'user.email', email]);
+}
+
+function ensureBaselineGitignore(projectPath) {
+  const gi = path.join(projectPath, '.gitignore');
+  if (!fs.existsSync(gi)) {
+    try { fs.writeFileSync(gi, BASELINE_GITIGNORE); } catch {}
+  }
+}
+
+function findEnvFiles(projectPath, maxDepth = 2) {
+  const out = [];
+  const walk = (dir, depth) => {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.isDirectory()) {
+        if (e.name === 'node_modules' || e.name === '.git' || e.name.startsWith('.') && e.name !== '.env') continue;
+        if (depth < maxDepth) walk(path.join(dir, e.name), depth + 1);
+      } else if (/^\.env(\..+)?$/i.test(e.name)) {
+        out.push(path.relative(projectPath, path.join(dir, e.name)));
+      }
+    }
+  };
+  walk(projectPath, 0);
+  return out;
+}
+
+function forceAddEnvFiles(projectPath) {
+  for (const f of findEnvFiles(projectPath)) {
+    git(projectPath, ['add', '-f', '--', f]);
+  }
+}
+
 // ---- partner code ----
 function encodeCode(payload) {
   return 'HELM-' + Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
@@ -128,8 +185,11 @@ function shareProject(projectPath, partnerGithub) {
     const i = git(projectPath, ['init']);
     if (!i.ok) return { ok: false, error: 'git init failed: ' + i.err };
   }
+  ensureGitIdentity(projectPath);
+  ensureBaselineGitignore(projectPath);
   exportContext(projectPath);
   git(projectPath, ['add', '-A']);
+  forceAddEnvFiles(projectPath); // everything syncs — env files included, past .gitignore
   git(projectPath, ['commit', '-m', 'helm-partner: initial share']); // no-op if clean
 
   // 2. remote: reuse origin if present, else create a private repo
@@ -181,6 +241,7 @@ function joinWithCode(code, projectsRoot) {
   if (!c.ok) {
     return { ok: false, error: 'Clone failed — make sure the owner gave your GitHub account access, and that git can sign in (it may pop up a browser). Details: ' + c.err.slice(0, 300) };
   }
+  ensureGitIdentity(dest);
   importContext(dest);
   const cfg = env.loadConfig();
   cfg.partners = (cfg.partners || []).filter((x) => x.projectPath !== dest);
@@ -198,7 +259,9 @@ function syncOne(entry) {
   syncing.add(p);
   try {
     // freshen the shared context before committing (owner & partner both export their memory)
+    ensureGitIdentity(p);
     exportContext(p);
+    forceAddEnvFiles(p); // everything syncs — new/changed env files included
     const dirty = git(p, ['status', '--porcelain']).out;
     if (dirty) {
       git(p, ['add', '-A']);
@@ -257,4 +320,132 @@ function setAutoSync(projectPath, on) {
   return { ok: true };
 }
 
-module.exports = { init, stopAll, shareProject, joinWithCode, syncOne, syncAll, list, remove, setAutoSync, decodeCode };
+// ---- share self-test: prove every link in the chain with a dummy project ----
+// Runs the REAL pipeline end-to-end (local engine → live GitHub → clone-back →
+// sync round trip) with throwaway content, logging PASS/FAIL per step. Leaves the
+// dummy repo + partner code behind so a second machine (e.g. the Mac) can join it
+// and verify the cross-machine leg before any real project is shared.
+const os = require('os');
+
+async function selfTest(progress) {
+  const steps = [];
+  const t0 = Date.now();
+  const log = (step, ok, detail) => {
+    const entry = { step, ok, detail: String(detail || '').slice(0, 300), t: Date.now() - t0 };
+    steps.push(entry);
+    try { if (progress) progress(entry); } catch {}
+    try {
+      if (env && env.userData) fs.appendFileSync(path.join(env.userData, 'share-selftest.log'),
+        JSON.stringify({ ...entry, ts: new Date().toISOString() }) + '\n');
+    } catch {}
+    return ok;
+  };
+  const yield_ = () => new Promise((r) => setImmediate(r)); // let progress events flush between blocking git calls
+  const fail = (extra) => ({ ok: false, steps, ...extra });
+
+  // 1-4: tooling
+  const gv = git(os.tmpdir(), ['--version']);
+  if (!log('git installed', gv.ok, gv.out || gv.err)) return fail({ blocker: 'Install git from git-scm.com.' });
+  await yield_();
+  const ghv = gh(['--version']);
+  log('GitHub CLI (gh) installed', ghv.ok, ghv.ok ? ghv.out.split('\n')[0] : 'gh not found — owner side needs it (partner side only needs git)');
+  let ghAuthed = false;
+  if (ghv.ok) {
+    const a = gh(['auth', 'status']);
+    ghAuthed = a.ok;
+    log('GitHub CLI signed in', a.ok, (a.out + ' ' + a.err).match(/Logged in to [^\n]+/i) ? (a.out + ' ' + a.err).match(/Logged in to [^\n]+/i)[0] : a.err.slice(0, 120));
+  }
+  await yield_();
+
+  // 5: local engine round trip (bare repo stands in for GitHub — no network)
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'helm-selftest-'));
+  try {
+    const bare = path.join(tmp, 'remote.git');
+    git(tmp, ['init', '--bare', bare]);
+    const p1 = path.join(tmp, 'dummy'); fs.mkdirSync(p1);
+    fs.writeFileSync(path.join(p1, 'hello.txt'), 'helm self-test v1');
+    fs.writeFileSync(path.join(p1, '.env'), 'TEST_SECRET=sync-me');
+    fs.writeFileSync(path.join(p1, '.gitignore'), '.env\n');
+    git(p1, ['init']); ensureGitIdentity(p1);
+    git(p1, ['add', '-A']); git(p1, ['add', '-f', '.env']);
+    const c1 = git(p1, ['commit', '-m', 'selftest']);
+    log('local commit engine (identity, staging)', c1.ok, c1.ok ? 'committed' : c1.err);
+    const br = git(p1, ['rev-parse', '--abbrev-ref', 'HEAD']).out || 'master';
+    git(p1, ['remote', 'add', 'origin', bare]);
+    const pu = git(p1, ['push', '-u', 'origin', br]);
+    log('local push/pull engine', pu.ok, pu.ok ? 'pushed to local bare repo' : pu.err);
+    const p2 = path.join(tmp, 'clone');
+    const cl = git(tmp, ['clone', bare, p2]);
+    const envArrived = cl.ok && fs.existsSync(path.join(p2, '.env'));
+    log('.env files survive sync (everything-syncs mode)', envArrived, envArrived ? '.env arrived in the clone' : cl.err);
+  } catch (e) {
+    log('local engine round trip', false, e.message);
+  } finally {
+    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
+  }
+  await yield_();
+
+  if (!ghAuthed) {
+    log('live GitHub leg', false, 'Skipped — gh not signed in. Local engine verified; run `gh auth login` then re-test.');
+    return fail({ blocker: 'GitHub CLI not signed in.' });
+  }
+
+  // 6-9: LIVE GitHub leg with a real (private, throwaway) repo
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'helm-selftest-live-'));
+  let code = '', url = '', repoFull = '';
+  try {
+    const proj = path.join(work, 'helm-share-test'); fs.mkdirSync(proj);
+    fs.writeFileSync(path.join(proj, 'README.md'), '# Claude Helm share self-test\nIf you can read this on the other machine, the pipe works.\n');
+    fs.writeFileSync(path.join(proj, 'marker.txt'), 'created ' + new Date().toISOString());
+    fs.mkdirSync(path.join(proj, CONTEXT_DIR));
+    fs.writeFileSync(path.join(proj, CONTEXT_DIR, 'selftest-memory.md'),
+      '---\nname: selftest-memory\ndescription: context travelled through the partner pipe\n---\n\nIf this file shows up in the joining machine\'s Context, context sync works.\n');
+    fs.writeFileSync(path.join(proj, CONTEXT_DIR, 'helm-meta.json'), JSON.stringify({ note: 'Share self-test note', tag: '', client: '' }, null, 2));
+    git(proj, ['init']); ensureGitIdentity(proj);
+    git(proj, ['add', '-A']);
+    git(proj, ['commit', '-m', 'helm share self-test']);
+    const repoName = 'helm-share-selftest-' + Math.random().toString(36).slice(2, 8);
+    const cr = gh(['repo', 'create', repoName, '--private', '--source', proj, '--remote', 'origin', '--push'], 180000);
+    if (!log('create private GitHub repo + push', cr.ok, cr.ok ? repoName : (cr.err || cr.out))) return fail({});
+    url = git(proj, ['remote', 'get-url', 'origin']).out;
+    repoFull = (url.match(/github\.com[:/](.+?)(\.git)?$/) || [])[1] || repoName;
+    await yield_();
+
+    code = encodeCode({ v: 1, url, name: 'helm-share-test' });
+    const dec = decodeCode(code);
+    log('partner code mint + decode', !!(dec && dec.url === url), code.slice(0, 28) + '…');
+    await yield_();
+
+    // clone back = exactly what the partner's Join does
+    const back = path.join(work, 'joined');
+    const cb = git(work, ['clone', url, back], 300000);
+    const okBack = cb.ok && fs.existsSync(path.join(back, 'marker.txt')) && fs.existsSync(path.join(back, CONTEXT_DIR, 'selftest-memory.md'));
+    log('clone-back (the partner Join leg)', okBack, okBack ? 'files + context arrived' : cb.err);
+    await yield_();
+
+    if (okBack) {
+      // live sync round trip through real GitHub
+      fs.writeFileSync(path.join(back, 'from-the-other-side.txt'), 'round trip');
+      ensureGitIdentity(back);
+      git(back, ['add', '-A']); git(back, ['commit', '-m', 'round trip']);
+      const p2 = git(back, ['push']);
+      const pl = git(proj, ['pull', '--rebase', '--autostash', 'origin'], 120000);
+      const round = p2.ok && pl.ok && fs.existsSync(path.join(proj, 'from-the-other-side.txt'));
+      log('two-way sync through real GitHub', round, round ? 'edit travelled clone → GitHub → original' : (p2.err || pl.err));
+    }
+
+    // register the owner entry so the dummy share shows in Clients & Partners (joinable from the Mac)
+    const cfg = env.loadConfig();
+    cfg.partners = (cfg.partners || []).filter((x) => x.name !== 'helm-share-test');
+    cfg.partners.push({ projectPath: path.join(work, 'helm-share-test'), name: 'helm-share-test', url, role: 'owner', code, autoSync: false, added: Date.now(), selftest: true });
+    env.saveConfig(cfg);
+    log('test code registered', true, 'Join from the other machine, then delete the repo when done.');
+  } catch (e) {
+    log('live GitHub leg', false, e.message);
+  }
+
+  const okAll = steps.every((s) => s.ok);
+  return { ok: okAll, steps, code, url, repoFull };
+}
+
+module.exports = { init, stopAll, shareProject, joinWithCode, syncOne, syncAll, list, remove, setAutoSync, decodeCode, selfTest };

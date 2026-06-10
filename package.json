@@ -1,13 +1,13 @@
 {
   "name": "claude-launcher",
-  "version": "1.11.0",
+  "version": "1.12.0",
   "description": "Claude Helm — monitor and open all your Claude Code projects",
   "main": "main.js",
   "author": "biery",
   "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "test": "node test-preview.js",
+    "test": "node test-preview.js && node test-partner.js",
     "pack": "electron-builder --dir",
     "dist": "electron-builder --win"
   },

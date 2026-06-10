@@ -705,6 +705,7 @@ app.whenReady().then(() => {
   share.init(app.getPath('userData'));
   partner.init({
     home: HOME,
+    userData: app.getPath('userData'),
     loadConfig, saveConfig, notify,
     onChange: () => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('partners-updated'); },
   });
@@ -1381,6 +1382,13 @@ ipcMain.handle('partner-sync-now', (_e, projectPath) => {
   } catch (e) { return { ok: false, error: e.message }; }
 });
 ipcMain.handle('partner-remove', (_e, projectPath) => partner.remove(projectPath));
+ipcMain.handle('partner-self-test', async () => {
+  try {
+    return await partner.selfTest((entry) => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('selftest-progress', entry);
+    });
+  } catch (e) { return { ok: false, steps: [], error: e.message }; }
+});
 ipcMain.handle('partner-autosync', (_e, { projectPath, on }) => partner.setAutoSync(projectPath, on));
 
 ipcMain.handle('run-quick-task', (_e, args) => {

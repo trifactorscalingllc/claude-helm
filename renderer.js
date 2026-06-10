@@ -620,6 +620,7 @@ async function loadPartners() {
     <div class="pt-actions">
       <button class="btn primary" id="ptShare">${svg('user', 14)} Share a project…</button>
       <button class="btn ghost" id="ptJoin">Join with a code…</button>
+      <button class="btn ghost" id="ptSelfTest" title="Dry-run the whole sharing pipeline with a dummy project and log every step">${svg('gauge', 14)} Self-test the pipes</button>
     </div>
   </div>`;
   host.querySelectorAll('.pt-row').forEach((row) => {
@@ -632,6 +633,45 @@ async function loadPartners() {
   });
   $('ptShare').addEventListener('click', openPartnerShareModal);
   $('ptJoin').addEventListener('click', openPartnerJoinModal);
+  $('ptSelfTest').addEventListener('click', runShareSelfTest);
+}
+
+// Dry-run the entire sharing pipeline with throwaway content. Live PASS/FAIL log,
+// then a real test code the other machine (e.g. the Mac) can join to prove the
+// cross-machine leg — before any real project is ever shared.
+async function runShareSelfTest() {
+  const { el, close } = popModal(`
+    <h3>Share pipeline self-test</h3>
+    <p class="modal-sub">Testing every link with a dummy project — nothing of yours is touched. The log also saves to <code>share-selftest.log</code>.</p>
+    <div class="st-log"></div>
+    <div class="st-result"></div>
+    <div class="modal-actions"><button class="btn ghost st-close">Close</button></div>`);
+  el.querySelector('.st-close').addEventListener('click', close);
+  const logEl = el.querySelector('.st-log');
+  const line = (entry) => {
+    const d = document.createElement('div');
+    d.className = 'st-line ' + (entry.ok ? 'ok' : 'bad');
+    d.innerHTML = `<span class="st-mark">${entry.ok ? '✓' : '✕'}</span> <strong>${escapeHtml(entry.step)}</strong>${entry.detail ? ` <span class="st-detail">${escapeHtml(entry.detail)}</span>` : ''}`;
+    logEl.appendChild(d);
+    logEl.scrollTop = logEl.scrollHeight;
+  };
+  const off = window.launcher.onSelfTestProgress(line);
+  const r = await window.launcher.partnerSelfTest();
+  off();
+  if (!el.isConnected) return;
+  const res = el.querySelector('.st-result');
+  if (r && r.code) {
+    res.innerHTML = `
+      <div class="panel-sub" style="margin:12px 0 6px"><strong>${r.ok ? 'All pipes work on this machine.' : 'Some steps failed — see above.'}</strong>
+      Now prove the cross-machine leg: on the other machine, open Claude Helm → Clients &amp; Partners → <strong>Join with a code</strong> and paste:</div>
+      <textarea readonly rows="3" style="width:100%;font-family:monospace;font-size:11px">${escapeHtml(r.code)}</textarea>
+      <div class="panel-sub" style="margin-top:6px">If <code>marker.txt</code> and the test memory show up there, sharing is fully hooked up. The dummy repo is <code>${escapeHtml(r.repoFull || '')}</code> — delete it on GitHub when you're done.</div>
+      <div style="display:flex;gap:8px;margin-top:8px"><button class="btn primary st-copy">Copy test code</button></div>`;
+    res.querySelector('.st-copy').addEventListener('click', async () => { await window.launcher.copyText(r.code); showStatus('Test code copied.', 'ok'); });
+    loadPartners();
+  } else {
+    res.innerHTML = `<div class="panel-sub" style="margin-top:12px"><strong>${escapeHtml((r && (r.blocker || r.error)) || 'Self-test could not complete.')}</strong></div>`;
+  }
 }
 
 function openPartnerShareModal() {
