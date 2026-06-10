@@ -151,7 +151,9 @@ const URL_RE = /(https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::\d+)?(?:\/[
 function extractUrl(text) {
   const m = text.match(URL_RE);
   if (!m) return null;
-  return m[1].replace('0.0.0.0', 'localhost').replace(/[).,]+$/, '');
+  // 0.0.0.0 is an IPv4 wildcard listener — reach it via 127.0.0.1, not
+  // `localhost` (which may resolve to ::1 and miss an IPv4-only socket).
+  return m[1].replace('0.0.0.0', '127.0.0.1').replace(/[).,]+$/, '');
 }
 
 // ---- static site ----
@@ -190,7 +192,10 @@ async function startStatic(projectPath, name, prof, target) {
       resolve({ ok: false, error: err.message });
     });
     server.listen(port, '127.0.0.1', () => {
-      const url = `http://localhost:${port}/`;
+      // URL host must match the bind address: `localhost` resolves to ::1 AND
+      // 127.0.0.1 on Windows, and the IPv6 attempt against an IPv4-only listener
+      // flakes (empty-message AggregateError — seen live in test-preview).
+      const url = `http://127.0.0.1:${port}/`;
       const entry = {
         projectPath, name, type: 'static', status: 'running', url, port, server,
         startedAt: Date.now(), logTail: `Serving ${root} on ${url}\n`, target,

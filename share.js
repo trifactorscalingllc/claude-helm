@@ -10,8 +10,15 @@
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
+const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
 const { EventEmitter } = require('events');
+
+// Pinned cloudflared release + checksum — we EXECUTE this binary, so a floating
+// `latest` URL is a supply-chain hole. Bump deliberately: new version tag +
+// matching SHA-256 from the cloudflared release notes (windows-amd64.exe line).
+const CLOUDFLARED_VERSION = '2026.6.0';
+const CLOUDFLARED_WIN_SHA256 = '03e322598e84d77406fa55b93f59e8e54636c5d8501d9dce36697fcf080ed8cc';
 
 const bus = new EventEmitter(); // 'change' | 'ready' {projectPath, url}
 
@@ -60,9 +67,26 @@ async function ensureCloudflared() {
   if (!binDir) return { ok: false, error: 'Share engine not initialized.' };
   fs.mkdirSync(binDir, { recursive: true });
   const dest = path.join(binDir, 'cloudflared.exe');
-  const url = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe';
-  await download(url, dest); // throws on failure
+  const url = `https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-windows-amd64.exe`;
+  const staged = dest + '.dl';
+  await download(url, staged); // throws on failure
+  const hash = await sha256File(staged);
+  if (hash !== CLOUDFLARED_WIN_SHA256) {
+    try { fs.unlinkSync(staged); } catch {}
+    return { ok: false, error: 'cloudflared download failed its integrity check (SHA-256 mismatch) — not installed.' };
+  }
+  fs.renameSync(staged, dest); // only a verified binary ever lands at the executable path
   return { ok: true, bin: dest, downloaded: true };
+}
+
+function sha256File(p) {
+  return new Promise((resolve, reject) => {
+    const h = crypto.createHash('sha256');
+    fs.createReadStream(p)
+      .on('data', (d) => h.update(d))
+      .on('end', () => resolve(h.digest('hex')))
+      .on('error', reject);
+  });
 }
 
 function publicInfo(e) {
@@ -78,8 +102,11 @@ function snapshot() {
 const TUNNEL_URL_RE = /(https:\/\/[a-z0-9-]+\.trycloudflare\.com)/i;
 
 async function start(projectPath, port) {
+  // Short-circuit on ANY existing entry — including one still in the 'starting'
+  // window (no URL yet). Spawning again there would orphan the first cloudflared
+  // and overwrite its map entry; the caller gets the URL via the 'ready' event.
   const existing = shares.get(projectPath);
-  if (existing && existing.url) return { ok: true, already: true, ...publicInfo(existing) };
+  if (existing) return { ok: true, already: true, ...publicInfo(existing) };
   const ensured = await ensureCloudflared().catch((e) => ({ ok: false, error: e.message }));
   if (!ensured.ok) return ensured;
 
@@ -114,7 +141,18 @@ async function start(projectPath, port) {
       if (shares.get(projectPath) === entry) { shares.delete(projectPath); bus.emit('change'); }
       if (!entry.url) resolve({ ok: false, error: 'Tunnel exited before a URL was issued. Check your internet connection.' });
     });
-    setTimeout(() => { if (!entry.url) { try { child.kill(); } catch {} resolve({ ok: false, error: 'Timed out waiting for the tunnel URL (30s).' }); } }, 30000);
+    setTimeout(() => {
+      if (entry.url) return;
+      // Kill the whole tree (plain .kill() leaves cloudflared's children on Windows)
+      // and clear the registry entry NOW — waiting for the 'exit' event leaves a
+      // stale 'starting' entry that blocks the user's retry.
+      try {
+        if (process.platform === 'win32' && child.pid) spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+        else child.kill('SIGTERM');
+      } catch {}
+      if (shares.get(projectPath) === entry) { shares.delete(projectPath); bus.emit('change'); }
+      resolve({ ok: false, error: 'Timed out waiting for the tunnel URL (30s).' });
+    }, 30000);
   });
 }
 

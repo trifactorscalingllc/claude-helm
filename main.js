@@ -52,6 +52,23 @@ const DEFAULTS = {
 
 const AI_CACHE_PATH = path.join(app.getPath('userData'), 'ai-summaries.json');
 
+// Last-resort crash handlers: an unexpected throw in any handler/timer must not
+// take the whole app down silently. Log to userData and keep running.
+const CRASH_LOG_PATH = path.join(app.getPath('userData'), 'crash.log');
+function logCrash(kind, err) {
+  try {
+    const line = `[${new Date().toISOString()}] ${kind}: ${(err && err.stack) || err}\n`;
+    fs.appendFileSync(CRASH_LOG_PATH, line);
+    // keep the log from growing without bound (~256KB cap, keep the tail)
+    if (fs.statSync(CRASH_LOG_PATH).size > 256 * 1024) {
+      const tail = fs.readFileSync(CRASH_LOG_PATH, 'utf8').slice(-128 * 1024);
+      fs.writeFileSync(CRASH_LOG_PATH, tail);
+    }
+  } catch {}
+}
+process.on('uncaughtException', (err) => logCrash('uncaughtException', err));
+process.on('unhandledRejection', (reason) => logCrash('unhandledRejection', reason));
+
 let mainWindow = null;
 
 // Single-instance lock — prevents multiple copies (which made updates fail to auto-close).
@@ -436,15 +453,22 @@ function loadConfig() {
   return cfg;
 }
 
+let warnedKeysNotPersisted = false;
 function saveConfig(cfg) {
   const out = { ...cfg };
-  // Encrypt secrets at rest; don't persist them in plaintext when encryption works.
+  // Encrypt secrets at rest. Plaintext keys NEVER hit disk: when the OS keychain
+  // is unavailable (e.g. Linux without a Secret Service), the keys live only in
+  // memory for this session and the user is told once — the README promises
+  // "never plaintext", so a silent cleartext fallback is not an option.
   if (safeStorage.isEncryptionAvailable()) {
     out.apiKeyEnc = out.apiKey ? encryptSecret(out.apiKey) : '';
     out.adminKeyEnc = out.adminKey ? encryptSecret(out.adminKey) : '';
-    delete out.apiKey;
-    delete out.adminKey;
+  } else if ((out.apiKey || out.adminKey) && !warnedKeysNotPersisted) {
+    warnedKeysNotPersisted = true;
+    notify('API key not saved', 'No OS keychain is available, so the key is kept in memory only and must be re-entered next launch.');
   }
+  delete out.apiKey;
+  delete out.adminKey;
   // Atomic write (temp + rename): a torn write would parse-fail in loadConfig,
   // which falls back to DEFAULTS — silently wiping partners, tags, keys, and
   // re-triggering onboarding. partner.js rewrites config every 45s, so the
@@ -455,6 +479,25 @@ function saveConfig(cfg) {
 }
 
 // ---------- window ----------
+
+// Navigation hardening for every webContents (main window, preview shell, and
+// preview <webview> guests): window.open / target=_blank never spawns an
+// unmanaged BrowserWindow — http(s) links go to the real browser instead.
+// The app's own UI pages (file://) additionally refuse to navigate anywhere:
+// they are local files and only ever load via loadFile. Webview guests are
+// exempt from the navigate guard — they exist to browse the previewed app.
+app.on('web-contents-created', (_e, contents) => {
+  contents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/i.test(url)) shell.openExternal(url).catch(() => {});
+    return { action: 'deny' };
+  });
+  if (contents.getType() !== 'webview') {
+    contents.on('will-navigate', (event, url) => {
+      event.preventDefault();
+      if (/^https?:/i.test(url)) shell.openExternal(url).catch(() => {});
+    });
+  }
+});
 
 function createWindow() {
   mainWindow = new BrowserWindow({
