@@ -9,7 +9,8 @@
     "start": "electron .",
     "test": "node test-preview.js && node test-partner.js",
     "pack": "electron-builder --dir",
-    "dist": "electron-builder --win"
+    "dist": "electron-builder --win",
+    "dist:mac": "electron-builder --mac"
   },
   "build": {
     "appId": "com.biery.claudelauncher",
