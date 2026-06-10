@@ -3013,11 +3013,12 @@ async function sampleActiveUsage() {
   const otherSessions = ordered.slice(1);
   const awaiting = !!lead.awaiting;
   el.classList.toggle('awaiting', awaiting);
-  const ctxPct = lead.contextTokens ? Math.min(100, Math.round(lead.contextTokens / 200000 * 100)) : 0;
+  const ctxWin = lead.contextWindow || 200000;
+  const ctxPct = lead.contextTokens ? Math.min(100, Math.round(lead.contextTokens / ctxWin * 100)) : 0;
   const ctxHigh = ctxPct >= 85;
   const statusTxt = awaiting ? '<span class="amb-wait">waiting for you</span>' : `${fmtDuration(lead.activeMs)} active`;
   const ctxHtml = ctxPct
-    ? ` · <span class="amb-ctx${ctxHigh ? ' high' : ''}" title="~${fmtTokens(lead.contextTokens)} of ~200K context window in use this session${ctxHigh ? ' — consider /compact' : ''}"><span class="amb-ctx-bar"><span style="width:${ctxPct}%"></span></span>ctx ${ctxPct}%</span>`
+    ? ` · <span class="amb-ctx${ctxHigh ? ' high' : ''}" title="~${fmtTokens(lead.contextTokens)} of ~${ctxWin >= 1000000 ? '1M' : '200K'} context window in use this session${ctxHigh ? ' — consider /compact' : ''}"><span class="amb-ctx-bar"><span style="width:${ctxPct}%"></span></span>ctx ${ctxPct}%</span>`
     : '';
   // Every other live session is named (and clickable), not collapsed to "+N more".
   const othersHtml = otherSessions.length
@@ -3058,7 +3059,7 @@ setInterval(() => { // live elapsed counter while a rescue runs
 function renderContextGuard(list) {
   const host = $('ctxGuard');
   if (!host) return;
-  const hot = (list || []).filter((s) => s.contextTokens && Math.round(s.contextTokens / 200000 * 100) >= CTX_GUARD_PCT);
+  const hot = (list || []).filter((s) => s.contextTokens && Math.round(s.contextTokens / (s.contextWindow || 200000) * 100) >= CTX_GUARD_PCT);
   // Sessions with a rescue running or finished must KEEP their row even after
   // they drop off the hot list (post-compaction the pct dips below the gate, and
   // the periodic re-render used to wipe the live status / "start fresh" button
@@ -3070,7 +3071,7 @@ function renderContextGuard(list) {
   if (!all.length) { host.classList.add('hidden'); host.innerHTML = ''; return; }
   host.classList.remove('hidden');
   const rows = all.map((s, i) => {
-    const pct = Math.min(100, Math.round(s.contextTokens / 200000 * 100));
+    const pct = Math.min(100, Math.round(s.contextTokens / (s.contextWindow || 200000) * 100));
     const st = rescueState.get(s.sessionId);
     const failed = rescueError.get(s.sessionId);
     const action = st === 'running'
@@ -3090,7 +3091,7 @@ function renderContextGuard(list) {
     // flip to the working state IMMEDIATELY — the old flow waited for the IPC
     // round-trip, so a fast double-click could fire two rescues
     rescueState.set(s.sessionId, 'running');
-    rescueInfo.set(s.sessionId, { name: s.name, path: s.path, sessionId: s.sessionId, contextTokens: s.contextTokens });
+    rescueInfo.set(s.sessionId, { name: s.name, path: s.path, sessionId: s.sessionId, contextTokens: s.contextTokens, contextWindow: s.contextWindow });
     rescueStart.set(s.sessionId, Date.now());
     rescueStage.set(s.sessionId, 'Starting the rescue…');
     rescueError.delete(s.sessionId);

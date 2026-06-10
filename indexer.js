@@ -120,7 +120,8 @@ class Indexer {
         firstTs: 0, lastTs: 0, activeMs: 0, turns: 0,
         tokens: { in: 0, out: 0, cw: 0, cr: 0 },
         cost: 0, models: {}, tools: {}, files: {}, title: '',
-        lastContextTokens: 0, // approx context-window size as of the latest turn
+        lastContextTokens: 0, // context in use as of the latest main-thread turn
+        contextWindow: 0,     // that turn's model window: 1M for [1m] models, else 200K
         lastType: '',         // 'user' | 'assistant' — role of the most recent event
         lastStop: '',         // most recent assistant stop_reason ('end_turn', 'tool_use', …)
       };
@@ -158,9 +159,14 @@ class Indexer {
       const cw = u.cache_creation_input_tokens || 0;
       const cr = u.cache_read_input_tokens || 0;
       sess.tokens.in += inc; sess.tokens.out += out; sess.tokens.cw += cw; sess.tokens.cr += cr;
-      // Context-window size as of this turn ≈ prompt (uncached + cached input) + output.
-      sess.lastContextTokens = inc + cw + cr + out;
-      sess.lastStop = msg.stop_reason || '';
+      // Context in use as of this turn ≈ prompt (uncached + cached input) + output.
+      // Sidechain (subagent) turns are real spend but run in their own, smaller
+      // context — letting them through made the gauge dip falsely mid-task.
+      if (!o.isSidechain) {
+        sess.lastContextTokens = inc + cw + cr + out;
+        sess.contextWindow = /\[1m\]/.test(msg.model || '') ? 1000000 : 200000;
+        sess.lastStop = msg.stop_reason || '';
+      }
       const pr = priceFor(msg.model);
       const cost = inc * pr.in + out * pr.out + cw * pr.cw + cr * pr.cr;
       sess.cost += cost;
@@ -195,7 +201,8 @@ class Indexer {
     if (o.aiTitle) sess.title = o.aiTitle;
     else if (o.type === 'ai-title' && (o.title || o.content)) sess.title = o.title || o.content;
 
-    if (o.type === 'user' || o.type === 'assistant') sess.lastType = o.type;
+    // sidechain events don't speak for the main conversation's waiting state
+    if (!o.isSidechain && (o.type === 'user' || o.type === 'assistant')) sess.lastType = o.type;
   }
 
   // Parse new bytes of one jsonl file from the stored offset to EOF.
@@ -587,6 +594,7 @@ class Indexer {
           model: Object.keys(s.models || {}).sort((a, b) => s.models[b] - s.models[a])[0] || '',
           models: Object.keys(s.models || {}),
           contextTokens: s.lastContextTokens || 0,
+          contextWindow: s.contextWindow || 200000,
           awaiting: s.lastType === 'assistant' && !!s.lastStop && s.lastStop !== 'tool_use',
         };
         if (preferId && id === preferId) preferred = info;
@@ -616,6 +624,7 @@ class Indexer {
           model: Object.keys(s.models || {}).sort((a, b) => s.models[b] - s.models[a])[0] || '',
           models: Object.keys(s.models || {}),
           contextTokens: s.lastContextTokens || 0,
+          contextWindow: s.contextWindow || 200000,
           awaiting: s.lastType === 'assistant' && !!s.lastStop && s.lastStop !== 'tool_use',
         });
       }

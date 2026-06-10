@@ -3,6 +3,12 @@
 All notable changes to Claude Helm are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/) · versions follow the `package.json` semver.
 
+## [1.17.2] - 2026-06-10
+
+### Fixed
+- **Context tracker accuracy** — sessions on 1M-context models (`[1m]` variants) are now measured against their real 1,000,000-token window instead of a hardcoded 200K, so the ctx % and the rescue card stop crying wolf at 17% full. The ambient tooltip names the window (~200K or ~1M).
+- Subagent (sidechain) turns no longer move the context gauge or the "waiting for you" flag — they run in their own smaller context, which made the gauge dip falsely mid-task. Their token spend still counts in usage and cost totals.
+
 ## [1.17.1] - 2026-06-10
 
 ### Changed
