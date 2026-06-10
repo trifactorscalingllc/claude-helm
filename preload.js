@@ -84,6 +84,7 @@ contextBridge.exposeInMainWorld('launcher', {
   getQuickTasks: () => ipcRenderer.invoke('get-quick-tasks'),
   clearQuickTasks: () => ipcRenderer.invoke('clear-quick-tasks'),
   setNotifyAwaiting: (on) => ipcRenderer.invoke('set-notify-awaiting', on),
+  setSilentUpdates: (on) => ipcRenderer.invoke('set-silent-updates', on),
   onTasksUpdated: (cb) => {
     const h = () => cb();
     ipcRenderer.on('tasks-updated', h);

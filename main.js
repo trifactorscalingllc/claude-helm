@@ -34,6 +34,7 @@ const DEFAULTS = {
   budgetWeekly: 0,     // $ weekly budget (0 = off)
   budgetMonthly: 0,    // $ monthly budget (0 = off)
   notifications: true, // desktop notifications (session finished, budget)
+  silentUpdates: true, // Chrome-style: install updates + relaunch automatically when the app is idle in the tray
   notifyAwaiting: true, // desktop ping when a live session is waiting on your input
   quickTasks: [],      // one-off `claude -p` dispatches (history, capped)
   partners: [],        // shared partner projects: {projectPath, repo, url, role, autoSync, status…}
@@ -479,6 +480,8 @@ function createWindow() {
   mainWindow.on('close', (e) => {
     if (!app.isQuitting && tray) { e.preventDefault(); mainWindow.hide(); }
   });
+  // a downloaded update that waited for you to finish installs once the window hides
+  mainWindow.on('hide', () => { if (pendingSilentVersion) setTimeout(() => maybeSilentInstall(null), 3000); });
 }
 
 // ---- in-app preview windows (one per launched project) ----
@@ -544,13 +547,35 @@ function setupAutoUpdate() {
   autoUpdater.on('update-available', (info) => sendUpdate('available', { version: info.version }));
   autoUpdater.on('update-not-available', () => sendUpdate('current'));
   autoUpdater.on('download-progress', (p) => sendUpdate('downloading', { percent: Math.round(p.percent) }));
-  autoUpdater.on('update-downloaded', (info) => sendUpdate('ready', { version: info.version }));
+  autoUpdater.on('update-downloaded', (info) => { sendUpdate('ready', { version: info.version }); maybeSilentInstall(info); });
   autoUpdater.on('error', (err) => sendUpdate('error', { message: String(err && err.message || err) }));
   // only check when packaged (dev builds have no update feed)
   if (app.isPackaged) {
     autoUpdater.checkForUpdates().catch(() => {});
     setInterval(() => autoUpdater.checkForUpdates().catch(() => {}), 6 * 60 * 60 * 1000); // every 6h
   }
+}
+
+// Chrome-style silent updates: once a new version is downloaded, install + relaunch
+// automatically — but only when the app is idle (window hidden in the tray, no preview
+// windows open, no headless tasks/routines running). If you're actively using it, the
+// banner stays as the fallback and the silent install fires the next time you hide
+// the window. Opt out in Settings.
+let pendingSilentVersion = '';
+function appIsIdle() {
+  const windowHidden = !mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible();
+  return windowHidden && previewWindows.size === 0 && runningTasks.size === 0 && runningRoutines.size === 0;
+}
+function maybeSilentInstall(info) {
+  const cfg = loadConfig();
+  if (cfg.silentUpdates === false) return;
+  const version = (info && info.version) || pendingSilentVersion;
+  if (!version) return;
+  if (!appIsIdle()) { pendingSilentVersion = version; return; } // try again when the window hides
+  pendingSilentVersion = '';
+  notify('Claude Helm is updating', `v${version} installs in the background — back in a few seconds.`);
+  app.isQuitting = true;
+  setTimeout(() => { try { autoUpdater.quitAndInstall(true, true); } catch (e) { app.isQuitting = false; sendUpdate('error', { message: e.message }); } }, 1200);
 }
 
 // Locate the installer electron-updater already downloaded (updater cache is
@@ -1400,6 +1425,12 @@ ipcMain.handle('clear-quick-tasks', () => {
   cfg.quickTasks = (cfg.quickTasks || []).filter((t) => t.status === 'running');
   saveConfig(cfg);
   return cfg.quickTasks;
+});
+ipcMain.handle('set-silent-updates', (_e, on) => {
+  const cfg = loadConfig();
+  cfg.silentUpdates = !!on;
+  saveConfig(cfg);
+  return cfg.silentUpdates;
 });
 ipcMain.handle('set-notify-awaiting', (_e, on) => {
   const cfg = loadConfig();

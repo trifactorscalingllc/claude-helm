@@ -1002,6 +1002,7 @@ function syncSettingsUI() {
   $('optNotifications').checked = cfg.notifications !== false;
   if ($('optNotifyAwaiting')) $('optNotifyAwaiting').checked = cfg.notifyAwaiting !== false;
   $('optRedact').checked = !!cfg.redact;
+  if ($('optSilentUpdates')) $('optSilentUpdates').checked = cfg.silentUpdates !== false;
   $('optOpenAtLogin').checked = !!cfg.openAtLogin;
   $('optStartHidden').checked = !!cfg.startHidden;
   $('optStartHidden').disabled = !cfg.openAtLogin;
@@ -2548,6 +2549,10 @@ async function init() {
   $('optNotifications').addEventListener('change', async (e) => { cfg.notifications = await window.launcher.setNotifications(e.target.checked); });
   if ($('optNotifyAwaiting')) $('optNotifyAwaiting').addEventListener('change', async (e) => {
     cfg.notifyAwaiting = await window.launcher.setNotifyAwaiting(e.target.checked);
+  });
+  if ($('optSilentUpdates')) $('optSilentUpdates').addEventListener('change', async (e) => {
+    cfg.silentUpdates = await window.launcher.setSilentUpdates(e.target.checked);
+    showStatus(cfg.silentUpdates ? 'Updates will install automatically in the background.' : 'Back to the restart banner.', 'ok');
   });
   $('optRedact').addEventListener('change', async (e) => { cfg.redact = await window.launcher.setRedact(e.target.checked); applyRedact(cfg.redact); });
   $('optOpenAtLogin').addEventListener('change', async (e) => {
