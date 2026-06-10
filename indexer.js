@@ -13,6 +13,7 @@ const IDLE_CAP_MS = 5 * 60 * 1000; // gaps longer than 5 min don't count as acti
 
 // Price per token, by model family. Cache write = 1.25x input (5m TTL), cache read = 0.1x input.
 const PRICES = {
+  fable:  { in: 10 / 1e6, out: 50 / 1e6, cw: 12.5 / 1e6, cr: 1 / 1e6 },
   opus:   { in: 5 / 1e6,  out: 25 / 1e6, cw: 6.25 / 1e6, cr: 0.5 / 1e6 },
   sonnet: { in: 3 / 1e6,  out: 15 / 1e6, cw: 3.75 / 1e6, cr: 0.3 / 1e6 },
   haiku:  { in: 1 / 1e6,  out: 5 / 1e6,  cw: 1.25 / 1e6, cr: 0.1 / 1e6 },
@@ -20,6 +21,7 @@ const PRICES = {
 
 function priceFor(model) {
   if (!model) return PRICES.opus;
+  if (model.includes('fable')) return PRICES.fable; // top tier — 2x opus; don't let it fall to the opus default
   if (model.includes('opus')) return PRICES.opus;
   if (model.includes('sonnet')) return PRICES.sonnet;
   if (model.includes('haiku')) return PRICES.haiku;
@@ -32,8 +34,15 @@ function hourKey(ts) {
   const d = new Date(ts);
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}`;
 }
+// Local-time day key 'YYYY-MM-DD'. Daily buckets MUST use this, not the ISO/UTC
+// date — otherwise evening work counts toward "tomorrow" and today's spend
+// resets mid-evening for anyone west of UTC. Accepts a timestamp or a Date.
+function dayKey(ts) {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
 
-const STORE_VERSION = 2; // bump → full re-index (adds hourly buckets)
+const STORE_VERSION = 3; // bump → full re-index (v3: local-time day keys + fable pricing)
 
 class Indexer {
   constructor(claudeProjectsDir, storePath) {
@@ -137,7 +146,7 @@ class Indexer {
         const gap = ts - sess.lastTs;
         if (gap > 0 && gap <= IDLE_CAP_MS) {
           sess.activeMs += gap;
-          const day = o.timestamp.slice(0, 10);
+          const day = dayKey(ts);
           daily[day] = daily[day] || { activeMs: 0, cost: 0, turns: 0, tokensIn: 0, tokensOut: 0 };
           daily[day].activeMs += gap;
           const hk = hourKey(ts);
@@ -172,7 +181,7 @@ class Indexer {
       sess.cost += cost;
       sess.turns += 1;
       if (ts && o.timestamp) {
-        const day = o.timestamp.slice(0, 10);
+        const day = dayKey(ts);
         daily[day] = daily[day] || { activeMs: 0, cost: 0, turns: 0, tokensIn: 0, tokensOut: 0 };
         daily[day].cost += cost;
         daily[day].turns += 1;
@@ -301,7 +310,7 @@ class Indexer {
   // counts come from session lastTs (>= since). Returns null on first run.
   awaySince(sinceTs) {
     if (!sinceTs) return null;
-    const sinceDay = new Date(sinceTs).toISOString().slice(0, 10);
+    const sinceDay = dayKey(sinceTs);
     const projects = [];
     const fileSet = new Set();
     let totalCost = 0, totalMs = 0, totalSessions = 0;
@@ -451,7 +460,7 @@ class Indexer {
     for (let i = days - 1; i >= 0; i--) {
       const d = new Date(today);
       d.setDate(today.getDate() - i);
-      const key = d.toISOString().slice(0, 10);
+      const key = dayKey(d);
       const rec = (p && p.daily && p.daily[key]) || { activeMs: 0, cost: 0, turns: 0 };
       out.push({ day: key, activeMs: rec.activeMs, cost: rec.cost, turns: rec.turns });
     }
@@ -468,7 +477,7 @@ class Indexer {
     if (hourly) {
       for (let i = 24 * days - 1; i >= 0; i--) { const t = now - i * 3600000; keys.push(hourKey(t)); labels.push(t); }
     } else {
-      for (let i = days - 1; i >= 0; i--) { const d = new Date(now - i * 86400000); keys.push(d.toISOString().slice(0, 10)); labels.push(d.getTime()); }
+      for (let i = days - 1; i >= 0; i--) { const d = new Date(now - i * 86400000); keys.push(dayKey(d)); labels.push(d.getTime()); }
     }
     let cost = 0, activeMs = 0, sessions = 0;
     const breakdown = [];
@@ -528,7 +537,7 @@ class Indexer {
     for (let i = days - 1; i >= 0; i--) {
       const dt = new Date(today);
       dt.setDate(today.getDate() - i);
-      const key = dt.toISOString().slice(0, 10);
+      const key = dayKey(dt);
       const rec = map[key] || { activeMs: 0, cost: 0 };
       out.push({ day: key, activeMs: rec.activeMs, cost: rec.cost });
     }
@@ -763,4 +772,4 @@ class Indexer {
   }
 }
 
-module.exports = { Indexer };
+module.exports = { Indexer, dayKey };

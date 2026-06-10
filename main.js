@@ -812,7 +812,7 @@ ipcMain.handle('daily-recap', async (_e, opts) => {
   const range = (opts && opts.range) === 'week' ? 'week' : 'today';
   const cfg = loadConfig();
   let sinceMs, label, cacheKey;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = require('./indexer').dayKey(Date.now()); // local day — recap cache rolls at local midnight
   if (range === 'week') {
     sinceMs = Date.now() - 7 * 86400000;
     label = 'the last 7 days';

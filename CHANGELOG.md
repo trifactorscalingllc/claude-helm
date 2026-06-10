@@ -3,6 +3,12 @@
 All notable changes to Claude Helm are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/) · versions follow the `package.json` semver.
 
+## [1.17.3] - 2026-06-10
+
+### Fixed
+- **Cost analytics for top-tier models** — sessions on Fable-family models are now priced at their real rate ($10/$50 per MTok, double Opus) instead of falling back to Opus pricing. All historical costs recompute on first launch (full re-index), so spend, budgets, model breakdown, and client reports reflect what you actually paid.
+- **Daily analytics use your local day** — daily buckets were keyed to UTC dates while hourly ones used local time, so evening work counted toward "tomorrow" and today's spend reset mid-evening. Daily keys are now local-time everywhere (recap, heatmap, budgets, away digest, sparklines).
+
 ## [1.17.2] - 2026-06-10
 
 ### Fixed
