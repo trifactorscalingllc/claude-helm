@@ -1,6 +1,6 @@
 {
   "name": "claude-launcher",
-  "version": "1.13.0",
+  "version": "1.13.1",
   "description": "Claude Helm — monitor and open all your Claude Code projects",
   "main": "main.js",
   "author": "biery",

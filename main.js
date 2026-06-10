@@ -581,8 +581,7 @@ function maybeSilentInstall(info) {
   if (!appIsIdle()) { pendingSilentVersion = version; return; } // try again when the window hides
   pendingSilentVersion = '';
   notify('Claude Helm is updating', `v${version} installs in the background — back in a few seconds.`);
-  app.isQuitting = true;
-  setTimeout(() => { try { autoUpdater.quitAndInstall(true, true); } catch (e) { app.isQuitting = false; sendUpdate('error', { message: e.message }); } }, 1200);
+  setTimeout(() => { try { performInstall(); } catch (e) { app.isQuitting = false; sendUpdate('error', { message: e.message }); } }, 1200);
 }
 
 // Locate the installer electron-updater already downloaded (updater cache is
@@ -595,45 +594,50 @@ function findPendingInstaller() {
   } catch { return ''; }
 }
 
-ipcMain.handle('install-update', () => {
-  try {
-    // macOS unsigned: quitAndInstall silently restarts the OLD version (Squirrel.Mac
-    // signature check). Send the user to the dmg instead of pretending.
-    if (process.platform === 'darwin') {
-      shell.openExternal('https://github.com/trifactorscalingllc/claude-helm/releases/latest');
-      return;
-    }
-    app.isQuitting = true;
-    const exe = process.execPath;
-    const installer = process.platform === 'win32' ? findPendingInstaller() : '';
+// The one true install path — used by BOTH the banner button and silent updates.
+// (Plain autoUpdater.quitAndInstall is unreliable here: Windows Defender holds the
+// old exe, NSIS's uninstall fails, nothing happens. Verified again live when the
+// first silent update stalled — the download was complete but quitAndInstall no-oped.)
+function performInstall() {
+  // macOS unsigned: Squirrel.Mac silently restarts the OLD version. Hand over the dmg.
+  if (process.platform === 'darwin') {
+    shell.openExternal('https://github.com/trifactorscalingllc/claude-helm/releases/latest');
+    return;
+  }
+  app.isQuitting = true;
+  const exe = process.execPath;
+  const installer = process.platform === 'win32' ? findPendingInstaller() : '';
 
-    // PREFERRED (unsigned Windows): run the downloaded installer OURSELVES, but
-    // only AFTER a short delay once the app has fully exited. The "failed to
-    // uninstall old application files (2)" dialog is caused by Windows Defender
-    // still holding the old exe when NSIS's immediate uninstall runs; giving it
-    // a few seconds lets the handle release so the uninstall succeeds cleanly
-    // (no dialog). Then relaunch. Single-instance lock dedupes any double-start.
-    if (installer) {
-      const cmd = `ping -n 5 127.0.0.1 >nul & "${installer}" /S & ping -n 12 127.0.0.1 >nul & start "" "${exe}" & ping -n 6 127.0.0.1 >nul & start "" "${exe}"`;
-      spawn(process.env.ComSpec || 'cmd.exe', ['/c', cmd],
-        { detached: true, stdio: 'ignore', windowsVerbatimArguments: true }).unref();
-      BrowserWindow.getAllWindows().forEach((w) => { try { w.removeAllListeners('close'); w.close(); } catch {} });
-      setImmediate(() => app.quit());
-      return;
-    }
-
-    // FALLBACK: electron-updater's own install, plus a relaunch watcher so the
-    // app still reopens even if NSIS skips its run-after on the exit-2 path.
-    if (process.platform === 'win32') {
-      try {
-        const relaunch = `ping -n 8 127.0.0.1 >nul & start "" "${exe}" & ping -n 14 127.0.0.1 >nul & start "" "${exe}"`;
-        spawn(process.env.ComSpec || 'cmd.exe', ['/c', relaunch],
-          { detached: true, stdio: 'ignore', windowsVerbatimArguments: true }).unref();
-      } catch {}
-    }
+  // PREFERRED (unsigned Windows): run the downloaded installer OURSELVES, but
+  // only AFTER a short delay once the app has fully exited. The "failed to
+  // uninstall old application files (2)" dialog is caused by Windows Defender
+  // still holding the old exe when NSIS's immediate uninstall runs; giving it
+  // a few seconds lets the handle release so the uninstall succeeds cleanly
+  // (no dialog). Then relaunch. Single-instance lock dedupes any double-start.
+  if (installer) {
+    const cmd = `ping -n 5 127.0.0.1 >nul & "${installer}" /S & ping -n 12 127.0.0.1 >nul & start "" "${exe}" & ping -n 6 127.0.0.1 >nul & start "" "${exe}"`;
+    spawn(process.env.ComSpec || 'cmd.exe', ['/c', cmd],
+      { detached: true, stdio: 'ignore', windowsVerbatimArguments: true }).unref();
     BrowserWindow.getAllWindows().forEach((w) => { try { w.removeAllListeners('close'); w.close(); } catch {} });
-    setImmediate(() => autoUpdater.quitAndInstall(true, true));
-  } catch {}
+    setImmediate(() => app.quit());
+    return;
+  }
+
+  // FALLBACK: electron-updater's own install, plus a relaunch watcher so the
+  // app still reopens even if NSIS skips its run-after on the exit-2 path.
+  if (process.platform === 'win32') {
+    try {
+      const relaunch = `ping -n 8 127.0.0.1 >nul & start "" "${exe}" & ping -n 14 127.0.0.1 >nul & start "" "${exe}"`;
+      spawn(process.env.ComSpec || 'cmd.exe', ['/c', relaunch],
+        { detached: true, stdio: 'ignore', windowsVerbatimArguments: true }).unref();
+    } catch {}
+  }
+  BrowserWindow.getAllWindows().forEach((w) => { try { w.removeAllListeners('close'); w.close(); } catch {} });
+  setImmediate(() => autoUpdater.quitAndInstall(true, true));
+}
+
+ipcMain.handle('install-update', () => {
+  try { performInstall(); } catch {}
 });
 ipcMain.handle('check-update', () => {
   if (app.isPackaged) autoUpdater.checkForUpdates().catch(() => {});
