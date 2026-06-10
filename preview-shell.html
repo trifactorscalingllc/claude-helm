@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; connect-src *;" />
+  <title>Preview</title>
+  <style>
+    :root { color-scheme: light dark; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; font-family: -apple-system, "Segoe UI", system-ui, sans-serif; }
+    body { display: flex; flex-direction: column; background: #1c1b18; }
+    .bar {
+      display: flex; align-items: center; gap: 8px; height: 40px; flex: 0 0 40px;
+      padding: 0 10px; background: #1c1b18; color: #e9e7e1; user-select: none;
+      border-bottom: 1px solid rgba(255,255,255,.08);
+    }
+    .bar button {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 30px; height: 28px; border: none; border-radius: 7px;
+      background: transparent; color: #cbc8c0; cursor: pointer; font-size: 15px;
+    }
+    .bar button:hover { background: rgba(255,255,255,.1); color: #fff; }
+    .name { font-weight: 600; font-size: 13px; margin-left: 2px; white-space: nowrap; }
+    .url {
+      flex: 1; min-width: 0; font-size: 12px; color: #8f8b81;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      padding: 0 6px; font-family: "SFMono-Regular", Consolas, monospace;
+    }
+    .pop { font-size: 11px; font-weight: 600; gap: 5px; width: auto; padding: 0 10px; }
+    webview { flex: 1 1 auto; width: 100%; border: none; background: #fff; }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <button id="back" title="Back">‹</button>
+    <button id="fwd" title="Forward">›</button>
+    <button id="reload" title="Reload">⟳</button>
+    <span class="name" id="name">Preview</span>
+    <span class="url" id="url"></span>
+    <button class="pop" id="pop" title="Open in your default browser">Open in browser ↗</button>
+  </div>
+  <webview id="view" allowpopups></webview>
+  <script src="preview-shell.js"></script>
+</body>
+</html>

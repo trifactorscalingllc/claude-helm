@@ -4,6 +4,8 @@ const fs = require('fs');
 const fsp = fs.promises;
 const { spawn, spawnSync } = require('child_process');
 const { Indexer } = require('./indexer');
+const preview = require('./preview');
+const agents = require('./agents');
 const { autoUpdater } = require('electron-updater');
 
 const HOME = app.getPath('home');
@@ -39,6 +41,7 @@ const DEFAULTS = {
   startHidden: false,  // when launched at login, start minimized to the tray
   adminKey: '',        // optional Anthropic Admin API key for real billed usage
   notes: {},           // { projectPath: "freeform note" }
+  previewTarget: 'window', // where Launch opens a running app/site: 'window' (in-app) | 'browser'
 };
 
 const AI_CACHE_PATH = path.join(app.getPath('userData'), 'ai-summaries.json');
@@ -377,6 +380,56 @@ function createWindow() {
   });
 }
 
+// ---- in-app preview windows (one per launched project) ----
+const previewWindows = new Map(); // projectPath -> BrowserWindow
+
+function openPreviewWindow(projectPath, url, name) {
+  let win = previewWindows.get(projectPath);
+  if (win && !win.isDestroyed()) {
+    win.webContents.send('preview-navigate', url);
+    win.show(); win.focus();
+    return;
+  }
+  win = new BrowserWindow({
+    width: 1200,
+    height: 840,
+    minWidth: 480,
+    minHeight: 360,
+    backgroundColor: '#1c1b18',
+    title: `${name} — Preview`,
+    icon: path.join(__dirname, 'icon.ico'),
+    webPreferences: {
+      preload: path.join(__dirname, 'preview-preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      webviewTag: true, // the shell hosts the page in a <webview>
+      partition: `preview:${projectPath}`, // isolated storage per project
+    },
+  });
+  win.removeMenu();
+  win.loadFile('preview-shell.html', { query: { url, name } });
+  win.on('closed', () => { previewWindows.delete(projectPath); });
+  previewWindows.set(projectPath, win);
+}
+
+function closePreviewWindow(projectPath) {
+  const win = previewWindows.get(projectPath);
+  if (win && !win.isDestroyed()) win.close();
+  previewWindows.delete(projectPath);
+}
+
+function sendPreviewState() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('preview-changed', preview.snapshot());
+  }
+}
+
+preview.bus.on('change', sendPreviewState);
+preview.bus.on('ready', ({ projectPath, url, name, target }) => {
+  if (target === 'browser') shell.openExternal(url);
+  else openPreviewWindow(projectPath, url, name);
+});
+
 // ---- auto-update (electron-updater → GitHub Releases) ----
 let lastUpdateState = null; // remembered so a freshly-loaded renderer never misses 'ready'
 function sendUpdate(state, info) {
@@ -566,7 +619,7 @@ app.whenReady().then(() => {
   });
 });
 
-app.on('before-quit', () => { app.isQuitting = true; try { indexer.flushSync(); } catch {} });
+app.on('before-quit', () => { app.isQuitting = true; try { indexer.flushSync(); } catch {} try { preview.stopAll(); } catch {} });
 app.on('will-quit', () => { try { globalShortcut.unregisterAll(); } catch {} });
 
 app.on('window-all-closed', () => {
@@ -1062,6 +1115,53 @@ ipcMain.handle('open-project', (_e, projectPath, overrides) => {
   } catch (err) {
     return { ok: false, error: err.message };
   }
+});
+
+// ---- live preview: run a project's app/site and open it ----
+ipcMain.handle('preview-scan', (_e, paths) => {
+  const out = {};
+  for (const p of paths || []) {
+    try {
+      const d = preview.detect(p);
+      if (d.launchable) out[p] = { launchable: true, type: d.type, label: d.label, command: d.command || '' };
+    } catch {}
+  }
+  return out;
+});
+ipcMain.handle('preview-detect', (_e, projectPath) => {
+  try { return preview.detect(projectPath); } catch (err) { return { launchable: false, error: err.message }; }
+});
+ipcMain.handle('preview-state', () => preview.snapshot());
+ipcMain.handle('preview-launch', async (_e, projectPath, name) => {
+  try {
+    const cfg = loadConfig();
+    const r = await preview.launch(projectPath, name || path.basename(projectPath), cfg.previewTarget || 'window');
+    // static previews resolve with their URL synchronously — open immediately
+    if (r.ok && r.already && r.url) {
+      if ((cfg.previewTarget || 'window') === 'browser') shell.openExternal(r.url);
+      else openPreviewWindow(projectPath, r.url, name || path.basename(projectPath));
+    }
+    return r;
+  } catch (err) { return { ok: false, error: err.message }; }
+});
+ipcMain.handle('preview-open', (_e, projectPath, name) => {
+  const info = preview.get(projectPath);
+  if (!info || !info.url) return { ok: false, error: 'Not running.' };
+  const cfg = loadConfig();
+  if ((cfg.previewTarget || 'window') === 'browser') shell.openExternal(info.url);
+  else openPreviewWindow(projectPath, info.url, name || path.basename(projectPath));
+  return { ok: true };
+});
+ipcMain.handle('preview-stop', (_e, projectPath) => {
+  closePreviewWindow(projectPath);
+  return preview.stop(projectPath);
+});
+ipcMain.handle('preview-log', (_e, projectPath) => preview.logTail(projectPath));
+ipcMain.handle('set-preview-target', (_e, val) => {
+  const cfg = loadConfig();
+  cfg.previewTarget = val === 'browser' ? 'browser' : 'window';
+  saveConfig(cfg);
+  return cfg.previewTarget;
 });
 
 // Session ids are uuids — validate before putting on a command line.
@@ -1577,6 +1677,34 @@ ipcMain.handle('ai-summary', async (_e, { projectPath, name }) => {
   }
 });
 
+// ---- agent maker (Claude Code subagents) ----
+ipcMain.handle('agents-list', (_e, projectPath) => agents.list(HOME, projectPath || ''));
+ipcMain.handle('agent-save', (_e, a) => agents.save(HOME, a || {}));
+ipcMain.handle('agent-delete', (_e, { scope, projectPath, name }) => agents.remove(HOME, scope, projectPath || '', name));
+ipcMain.handle('open-agents-folder', (_e, { scope, projectPath }) => {
+  const dir = agents.dirFor(HOME, scope, projectPath || '');
+  if (!dir) return { ok: false };
+  try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+  shell.openPath(dir);
+  return { ok: true, dir };
+});
+ipcMain.handle('generate-agent-prompt', async (_e, { name, description }) => {
+  const cfg = loadConfig();
+  if (!cfg.apiKey) return { ok: false, error: 'Add your Anthropic API key in Settings → AI & Usage to generate prompts.' };
+  try {
+    const Anthropic = require('@anthropic-ai/sdk');
+    const client = new Anthropic({ apiKey: cfg.apiKey });
+    const resp = await client.messages.create({
+      model: 'claude-opus-4-8',
+      max_tokens: 900,
+      system: "You write system prompts for Claude Code subagents. Given an agent name and a short description of what it should do, output ONLY the system prompt body — no frontmatter, no markdown code fences, no preamble or sign-off. Write in the second person (\"You are…\"). Be specific about the agent's role, when it should act, the method it follows, and what a good result looks like. Aim for 120–300 words.",
+      messages: [{ role: 'user', content: `Agent name: ${name || '(unnamed)'}\nWhat it should do: ${description || ''}` }],
+    });
+    const text = (resp.content.find((b) => b.type === 'text') || {}).text || '';
+    return { ok: true, prompt: text.trim() };
+  } catch (err) { return { ok: false, error: err.message }; }
+});
+
 ipcMain.handle('set-api-key', (_e, key) => {
   const cfg = loadConfig();
   cfg.apiKey = String(key || '').trim();
@@ -1662,6 +1790,46 @@ ipcMain.handle('get-context', async () => {
   let claudeMd = '';
   try { claudeMd = await fsp.readFile(path.join(HOME, '.claude', 'CLAUDE.md'), 'utf8'); } catch {}
   return { groups, count, claudeMd, memDir };
+});
+
+// Read the signed-in Claude account + subscription plan straight from what Claude Code
+// already stored locally (~/.claude.json → oauthAccount). No network, no token exposure —
+// we never touch ~/.claude/.credentials.json. This is the real plan, not a guess.
+function planLabel(orgType, rateTier) {
+  const t = String(orgType || '').toLowerCase();
+  let base = 'Claude';
+  if (t.includes('max')) base = 'Claude Max';
+  else if (t.includes('pro')) base = 'Claude Pro';
+  else if (t.includes('team')) base = 'Claude Team';
+  else if (t.includes('enterprise')) base = 'Claude Enterprise';
+  else if (t.includes('free')) base = 'Claude Free';
+  else if (orgType) base = orgType;
+  const mult = String(rateTier || '').match(/(\d+)\s*x/i);
+  if (mult && base === 'Claude Max') base += ` ${mult[1]}×`;
+  return base;
+}
+ipcMain.handle('claude-account', () => {
+  try {
+    const raw = fs.readFileSync(path.join(HOME, '.claude.json'), 'utf8');
+    const o = (JSON.parse(raw) || {}).oauthAccount;
+    if (!o || !o.emailAddress) return { signedIn: false };
+    return {
+      signedIn: true,
+      email: o.emailAddress,
+      displayName: o.displayName || '',
+      organization: o.organizationName || '',
+      organizationRole: o.organizationRole || '',
+      plan: planLabel(o.organizationType, o.organizationRateLimitTier),
+      planRaw: o.organizationType || '',
+      rateLimitTier: o.organizationRateLimitTier || '',
+      billingType: o.billingType || '',
+      extraUsage: !!o.hasExtraUsageEnabled,
+      subscriptionCreatedAt: o.subscriptionCreatedAt || '',
+      trialEndsAt: o.claudeCodeTrialEndsAt || null,
+    };
+  } catch (err) {
+    return { signedIn: false, error: err.message };
+  }
 });
 
 ipcMain.handle('open-memory-folder', () => {

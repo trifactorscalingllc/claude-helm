@@ -31,6 +31,9 @@ const ICONS = {
   bolt: '<path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/>',
   branch: '<line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
   gauge: '<path d="M12 14l4-4"/><path d="M3.5 14a8.5 8.5 0 1 1 17 0"/><circle cx="12" cy="14" r="1.6" fill="currentColor"/>',
+  play: '<path d="M7 4l13 8-13 8z"/>',
+  stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18z"/>',
 };
 
 // Shown on every cost figure so the dollar number is never mistaken for a bill.
@@ -148,6 +151,9 @@ let cfg = { root: '', pinned: [], launch: {} };
 let projects = [];
 let externalProjects = [];
 const cardEls = new Map(); // project path → its rendered card element (for in-place live updates)
+let previewProfiles = {}; // path -> { launchable, type, label, command } — which projects can Launch
+let previewRunning = {};  // path -> { status, url, type, name } — which previews are live now
+let detailProject = null; // project currently shown in the detail view (for live preview repaint)
 let filter = '';
 let overviewDays = 7;
 let recapRange = 'today'; // 'today' | 'week'
@@ -209,10 +215,20 @@ function popupMenu(anchor, items) {
 
 async function openCardMenu(anchor, p) {
   const launch = async (model) => { const r = await window.launcher.openProject(p.path, model ? { model } : undefined); await handleLaunchResult(r, p.name); };
+  const prof = previewProfiles[p.path];
+  const run = previewRunning[p.path];
+  const previewItems = prof && prof.launchable ? [
+    run
+      ? { label: 'Open running app/site', icon: 'globe', onClick: () => window.launcher.previewOpen(p.path, p.name) }
+      : { label: prof.label, icon: 'globe', onClick: () => launchPreview(p) },
+    ...(run ? [{ label: 'Stop app/site', icon: 'stop', danger: true, onClick: () => stopPreview(p) }] : []),
+    { sep: true },
+  ] : [];
   const items = [
     { label: 'View stats & sessions', icon: 'chart', onClick: () => openDetail(p) },
     { label: 'Open folder', icon: 'folder', onClick: () => window.launcher.openInExplorer(p.path) },
     { sep: true },
+    ...previewItems,
     { label: 'Open with Opus', icon: 'bolt', onClick: () => launch('opus') },
     { label: 'Open with Sonnet', icon: 'bolt', onClick: () => launch('sonnet') },
     { label: 'Open with Haiku', icon: 'bolt', onClick: () => launch('haiku') },
@@ -234,9 +250,87 @@ async function openRow(p) {
   const res = await window.launcher.openProject(p.path);
   await handleLaunchResult(res, p.name);
 }
+// ---------- live preview (Launch a project's app/site) ----------
+async function refreshPreviewData() {
+  try {
+    const paths = [...projects, ...externalProjects].map((p) => p.path);
+    previewProfiles = (await window.launcher.previewScan(paths)) || {};
+    previewRunning = (await window.launcher.previewState()) || {};
+  } catch { previewProfiles = {}; previewRunning = {}; }
+}
+
+// Launch (or focus, if already running) a project's app/site.
+async function launchPreview(p) {
+  const run = previewRunning[p.path];
+  if (run && run.url) { await window.launcher.previewOpen(p.path, p.name); return; }
+  showStatus(`Starting ${p.name}…`, 'ok');
+  const r = await window.launcher.previewLaunch(p.path, p.name);
+  if (!r || !r.ok) { showStatus((r && r.error) || 'Could not launch.', 'warn'); return; }
+  if (r.type === 'server' && !r.url) showStatus(`Running ${p.name} — waiting for it to print a URL…`, 'ok');
+}
+async function stopPreview(p) {
+  await window.launcher.previewStop(p.path);
+}
+
+// Decorate a row/card's preview button from current profile + running state. Idempotent.
+function paintPreviewBtn(btn, p) {
+  if (!btn) return;
+  const prof = previewProfiles[p.path];
+  if (!prof || !prof.launchable) { btn.classList.add('hidden'); return; }
+  btn.classList.remove('hidden');
+  const run = previewRunning[p.path];
+  if (run) {
+    const starting = run.status === 'starting';
+    btn.classList.add('running');
+    btn.innerHTML = `${svg(starting ? 'globe' : 'play', 13)} ${starting ? 'Starting…' : 'Open'}`;
+    btn.title = starting ? 'Starting…' : `Open ${run.url} · running`;
+  } else {
+    btn.classList.remove('running');
+    btn.innerHTML = `${svg('globe', 13)} Launch`;
+    btn.title = `${prof.label}${prof.command ? ' · ' + prof.command : ''}`;
+  }
+}
+
+// Paint the detail view's Launch / Stop buttons from current state.
+function paintDetailLaunch(p) {
+  const lb = document.querySelector('#view-detail .d-launch');
+  const sb = document.querySelector('#view-detail .d-stop');
+  if (!lb) return;
+  const prof = previewProfiles[p.path];
+  if (!prof || !prof.launchable) { lb.classList.add('hidden'); if (sb) sb.classList.add('hidden'); return; }
+  const run = previewRunning[p.path];
+  lb.classList.remove('hidden');
+  lb.innerHTML = run ? `${svg('globe', 14)} Open app/site` : `${svg('globe', 14)} ${prof.label}`;
+  lb.title = run ? `Open ${run.url}` : (prof.command || prof.label);
+  if (sb) sb.classList.toggle('hidden', !run);
+}
+function updateDetailPreview() { if (detailProject) paintDetailLaunch(detailProject); }
+
+// Inject the Launch/Stop buttons into a detail-actions bar and wire them.
+function wireDetailLaunch(body, p) {
+  const lb = body.querySelector('.d-launch');
+  const sb = body.querySelector('.d-stop');
+  if (lb) lb.addEventListener('click', () => {
+    const run = previewRunning[p.path];
+    if (run && run.url) window.launcher.previewOpen(p.path, p.name); else launchPreview(p);
+  });
+  if (sb) sb.addEventListener('click', () => stopPreview(p));
+  paintDetailLaunch(p);
+}
+
+// Update every visible row's preview button in place (called on preview-changed).
+function repaintAllPreviewBtns() {
+  document.querySelectorAll('.rrow[data-path]').forEach((el) => {
+    const path = el.dataset.path;
+    const p = projects.find((x) => x.path === path) || externalProjects.find((x) => x.path === path);
+    if (p) paintPreviewBtn(el.querySelector('.preview-btn'), p);
+  });
+}
+
 function makeResumeRow(p) {
   const el = document.createElement('div');
   el.className = 'rrow' + (p.archived ? ' archived' : '');
+  el.dataset.path = p.path;
   el.tabIndex = -1;
   const pinned = cfg.pinned.includes(p.path);
   el.innerHTML = `
@@ -253,9 +347,13 @@ function makeResumeRow(p) {
     </div>
     <button class="pin-btn ${pinned ? 'pinned' : ''}" title="${pinned ? 'Unpin' : 'Pin'}">${pinned ? fillSvg('star', 15) : svg('star', 15)}</button>
     <button class="btn primary btn-xs open">${svg('terminal', 14)} Open</button>
+    <button class="btn ghost btn-xs preview-btn hidden" title="Launch app/site"></button>
     <button class="icon-btn more" title="Details &amp; actions">${svg('dots', 16)}</button>`;
   el.addEventListener('click', (e) => { if (!e.target.closest('button')) openRow(p); });
   el.querySelector('.open').addEventListener('click', (e) => { e.stopPropagation(); openRow(p); });
+  const pv = el.querySelector('.preview-btn');
+  paintPreviewBtn(pv, p);
+  pv.addEventListener('click', (e) => { e.stopPropagation(); launchPreview(p); });
   el.querySelector('.more').addEventListener('click', (e) => { e.stopPropagation(); openCardMenu(e.currentTarget, p); });
   el.querySelector('.pin-btn').addEventListener('click', async (e) => { e.stopPropagation(); cfg.pinned = await window.launcher.togglePin(p.path); render(); });
   loadMetrics(el, p);
@@ -578,6 +676,7 @@ async function loadProjects() {
   externalProjects = res.external || [];
   populateTagFilter();
   $('footCount').textContent = `${projects.length} projects`;
+  await refreshPreviewData();
   render();
 }
 
@@ -610,6 +709,7 @@ async function reconcileProjects() {
   populateTagFilter();
   $('footCount').textContent = `${projects.length} projects`;
   if (sig(projects) + '#' + sig(externalProjects) !== before) {
+    await refreshPreviewData();
     render(); // a project was added/removed → rebuild
   } else {
     for (const [path, el] of cardEls) { // same set → refresh in place
@@ -651,6 +751,7 @@ function syncSettingsUI() {
   if ($('optAdminKey')) $('optAdminKey').value = cfg.hasAdminKey ? '••••••••••••••••' : '';
   $('optAutoTrust').checked = !!cfg.autoTrust;
   $('optTerminal').value = cfg.terminalCommand || '';
+  if ($('optPreviewTarget')) $('optPreviewTarget').value = cfg.previewTarget || 'window';
   $('optBudgetWeekly').value = cfg.budgetWeekly || '';
   $('optBudgetMonthly').value = cfg.budgetMonthly || '';
   $('optNotifications').checked = cfg.notifications !== false;
@@ -666,6 +767,29 @@ function syncSettingsUI() {
   updateCmdPreview();
 }
 
+// Show the real signed-in Claude account + subscription plan (read locally by main).
+async function renderAccountCard() {
+  const el = $('accountCard');
+  if (!el) return;
+  let a;
+  try { a = await window.launcher.claudeAccount(); } catch { a = null; }
+  if (!a || !a.signedIn) {
+    el.innerHTML = `<div class="acct-empty">Not signed in to Claude Code on this machine. Run <code>claude</code> and sign in, then reopen this tab.</div>`;
+    return;
+  }
+  const created = a.subscriptionCreatedAt ? new Date(a.subscriptionCreatedAt).toLocaleDateString() : '';
+  const rows = [
+    ['Plan', `<span class="acct-plan">${escapeHtml(a.plan)}</span>`],
+    ['Signed in as', `${escapeHtml(a.displayName || a.email)} <span class="muted">${escapeHtml(a.email)}</span>`],
+    a.organization ? ['Organization', `${escapeHtml(a.organization)}${a.organizationRole ? ` · ${escapeHtml(a.organizationRole)}` : ''}`] : null,
+    a.billingType ? ['Billing', escapeHtml(a.billingType.replace(/_/g, ' '))] : null,
+    a.extraUsage ? ['Extra usage', 'enabled'] : null,
+    created ? ['Subscription since', created] : null,
+  ].filter(Boolean);
+  el.innerHTML = rows.map(([k, v]) => `<div class="acct-row"><span class="acct-k">${k}</span><span class="acct-v">${v}</span></div>`).join('') +
+    `<div class="panel-sub" style="margin-top:10px">Live quota usage (how much of your ${escapeHtml(a.plan)} limit is left) isn't exposed by any Anthropic API — this reads your plan, not a usage meter. Per-session context use is shown live on the home screen.</div>`;
+}
+
 function updateApiHint() {
   const h = $('apiKeyHint');
   if (!cfg.hasApiKey) h.textContent = 'No key set — using offline summaries.';
@@ -679,9 +803,150 @@ async function saveLaunch(patch) {
 }
 
 // ---------- views ----------
+// ---------- agent maker ----------
+const AGENT_TOOLS = ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash', 'WebFetch', 'WebSearch', 'Task', 'TodoWrite'];
+let agentEditing = null;     // the agent object being edited, or null for a new one
+let agentScope = 'global';   // 'global' | 'project'
+let agentsWired = false;
+
+async function loadAgentsView() {
+  // populate the project dropdown from the known projects
+  const sel = $('agentProject');
+  if (sel) {
+    const all = [...projects, ...externalProjects];
+    sel.innerHTML = all.map((p) => `<option value="${escapeHtml(p.path)}">${escapeHtml(p.name)}</option>`).join('')
+      || '<option value="">(no projects)</option>';
+  }
+  // render the tool checkboxes once
+  const tw = $('agentTools');
+  if (tw && !tw.dataset.built) {
+    tw.innerHTML = AGENT_TOOLS.map((t) =>
+      `<label class="agent-tool"><input type="checkbox" value="${t}" /> ${t}</label>`).join('');
+    tw.dataset.built = '1';
+  }
+  if (!agentsWired) { wireAgentForm(); agentsWired = true; }
+  await renderAgentList();
+  if (!agentEditing) resetAgentForm();
+}
+
+async function renderAgentList() {
+  const host = $('agentList');
+  if (!host) return;
+  const projectPath = agentScope === 'project' ? ($('agentProject') && $('agentProject').value) : '';
+  let data;
+  try { data = await window.launcher.agentsList(projectPath); } catch { data = { global: [], project: [] }; }
+  const section = (title, arr) => arr.length ? `
+    <div class="agent-group-title">${title}</div>
+    ${arr.map((a) => `
+      <div class="agent-item" data-scope="${a.scope}" data-name="${escapeHtml(a.name)}" data-path="${escapeHtml(a.projectPath || '')}">
+        <div class="agent-item-main">
+          <div class="agent-item-name">${escapeHtml(a.name)} <span class="agent-chip">${a.model === 'inherit' ? 'inherit' : escapeHtml(a.model)}</span></div>
+          <div class="agent-item-desc">${escapeHtml(a.description || 'No description')}</div>
+        </div>
+      </div>`).join('')}` : '';
+  const html = section('Global · all projects', data.global) + section('This project', data.project || []);
+  host.innerHTML = html || '<p class="panel-sub">No agents yet. Fill in the form and Save to create your first one.</p>';
+  host.querySelectorAll('.agent-item').forEach((el) => {
+    el.addEventListener('click', () => {
+      const arr = el.dataset.scope === 'project' ? (data.project || []) : data.global;
+      const a = arr.find((x) => x.name === el.dataset.name);
+      if (a) editAgent(a);
+    });
+  });
+}
+
+function readAgentForm() {
+  return {
+    scope: agentScope,
+    projectPath: agentScope === 'project' ? ($('agentProject') && $('agentProject').value) : '',
+    name: $('agentName').value.trim(),
+    description: $('agentDesc').value.trim(),
+    tools: [...document.querySelectorAll('#agentTools input:checked')].map((c) => c.value),
+    model: $('agentModel').value,
+    prompt: $('agentPrompt').value,
+    originalName: agentEditing ? agentEditing.name : '',
+  };
+}
+
+function setAgentScope(scope) {
+  agentScope = scope === 'project' ? 'project' : 'global';
+  document.querySelectorAll('#agentScope button').forEach((b) => b.classList.toggle('active', b.dataset.scope === agentScope));
+  $('agentProjectField').classList.toggle('hidden', agentScope !== 'project');
+  renderAgentList();
+}
+
+function editAgent(a) {
+  agentEditing = a;
+  setAgentScope(a.scope);
+  if (a.scope === 'project' && a.projectPath && $('agentProject')) $('agentProject').value = a.projectPath;
+  $('agentName').value = a.name;
+  $('agentDesc').value = a.description || '';
+  $('agentModel').value = a.model || 'inherit';
+  $('agentPrompt').value = a.prompt || '';
+  document.querySelectorAll('#agentTools input').forEach((c) => { c.checked = a.tools.includes(c.value); });
+  $('agentFormTitle').textContent = `Editing: ${a.name}`;
+  $('agentDelete').classList.remove('hidden');
+  $('agentFormMsg').textContent = '';
+}
+
+function resetAgentForm() {
+  agentEditing = null;
+  $('agentName').value = '';
+  $('agentDesc').value = '';
+  $('agentModel').value = 'inherit';
+  $('agentPrompt').value = '';
+  document.querySelectorAll('#agentTools input').forEach((c) => { c.checked = false; });
+  $('agentFormTitle').textContent = 'New agent';
+  $('agentDelete').classList.add('hidden');
+  $('agentFormMsg').textContent = '';
+}
+
+function wireAgentForm() {
+  document.querySelectorAll('#agentScope button').forEach((b) =>
+    b.addEventListener('click', () => setAgentScope(b.dataset.scope)));
+  if ($('agentProject')) $('agentProject').addEventListener('change', renderAgentList);
+  $('agentNew').addEventListener('click', () => { resetAgentForm(); $('agentName').focus(); });
+  $('agentReset').addEventListener('click', resetAgentForm);
+  $('agentFolder').addEventListener('click', () => window.launcher.openAgentsFolder({
+    scope: agentScope, projectPath: agentScope === 'project' ? ($('agentProject') && $('agentProject').value) : '',
+  }));
+  $('agentSave').addEventListener('click', async () => {
+    const a = readAgentForm();
+    const msg = $('agentFormMsg');
+    if (!a.name) { msg.textContent = 'Give the agent a name first.'; return; }
+    if (a.scope === 'project' && !a.projectPath) { msg.textContent = 'Pick a project to save into.'; return; }
+    const r = await window.launcher.agentSave(a);
+    if (!r || !r.ok) { msg.textContent = (r && r.error) || 'Could not save.'; return; }
+    showStatus(`Agent "${a.name}" saved.`, 'ok');
+    agentEditing = { ...a };
+    $('agentFormTitle').textContent = `Editing: ${a.name}`;
+    $('agentDelete').classList.remove('hidden');
+    msg.textContent = '';
+    renderAgentList();
+  });
+  $('agentDelete').addEventListener('click', async () => {
+    if (!agentEditing) return;
+    const r = await window.launcher.agentDelete({ scope: agentEditing.scope, projectPath: agentEditing.projectPath, name: agentEditing.name });
+    if (r && r.ok) { showStatus(`Agent "${agentEditing.name}" deleted.`, 'ok'); resetAgentForm(); renderAgentList(); }
+    else showStatus((r && r.error) || 'Could not delete.', 'warn');
+  });
+  $('agentGenerate').addEventListener('click', async () => {
+    const name = $('agentName').value.trim();
+    const description = $('agentDesc').value.trim();
+    const msg = $('agentFormMsg');
+    if (!description) { msg.textContent = 'Add a short description first — that\'s what Claude drafts the prompt from.'; return; }
+    const btn = $('agentGenerate');
+    btn.disabled = true; const old = btn.innerHTML; btn.innerHTML = 'Generating…';
+    const r = await window.launcher.generateAgentPrompt({ name, description });
+    btn.disabled = false; btn.innerHTML = old;
+    if (r && r.ok) { $('agentPrompt').value = r.prompt; msg.textContent = 'Draft generated — edit as you like, then Save.'; }
+    else msg.textContent = (r && r.error) || 'Could not generate.';
+  });
+}
+
 function switchView(view) {
   document.querySelectorAll('.nav-item').forEach((n) => n.classList.toggle('active', n.dataset.view === view));
-  ['projects', 'search', 'settings', 'overview', 'analytics', 'clients', 'detail', 'context', 'routines', 'transcript'].forEach((v) => {
+  ['projects', 'search', 'settings', 'overview', 'analytics', 'clients', 'detail', 'context', 'agents', 'routines', 'transcript'].forEach((v) => {
     const el = $(`view-${v}`);
     if (el) el.classList.toggle('hidden', view !== v);
   });
@@ -690,6 +955,7 @@ function switchView(view) {
   if (view === 'context') loadContext();
   if (view === 'search') loadSearch();
   if (view === 'clients') loadClients();
+  if (view === 'agents') loadAgentsView();
 }
 
 // ---------- Transcript viewer ----------
@@ -1052,6 +1318,7 @@ function wireNotes(body, p) {
 }
 
 async function openDetail(p) {
+  detailProject = p;
   switchView('detail');
   const root = $('view-detail');
   root.querySelector('.detail-name').textContent = p.name;
@@ -1073,7 +1340,17 @@ async function openDetail(p) {
   sumEl.classList.toggle('hidden', !summaryText);
   const t = d.totals;
   if (!t || t.sessions === 0) {
-    body.innerHTML = `<div class="panel"><p class="panel-sub">No Claude Code sessions recorded for this project yet. Open it in Claude and your time, cost, and activity will appear here.</p></div>${notesPanel(p)}`;
+    body.innerHTML = `
+      <div class="detail-actions">
+        <button class="btn primary d-open">${svg('terminal', 15)} Open in Claude</button>
+        <button class="btn ghost d-launch hidden"></button>
+        <button class="btn ghost d-stop hidden" title="Stop the running app/site">${svg('stop', 14)} Stop</button>
+        <button class="icon-btn d-folder" title="Open folder in Explorer">${svg('folder', 16)}</button>
+      </div>
+      <div class="panel"><p class="panel-sub">No Claude Code sessions recorded for this project yet. Open it in Claude and your time, cost, and activity will appear here.</p></div>${notesPanel(p)}`;
+    body.querySelector('.d-open').addEventListener('click', async () => { const r = await window.launcher.openProject(p.path); await handleLaunchResult(r, p.name); });
+    body.querySelector('.d-folder').addEventListener('click', () => window.launcher.openInExplorer(p.path));
+    wireDetailLaunch(body, p);
     wireNotes(body, p);
     return;
   }
@@ -1089,6 +1366,8 @@ async function openDetail(p) {
     <div class="detail-actions">
       <button class="btn primary d-open">${svg('terminal', 15)} Open in Claude</button>
       ${lastId ? `<button class="btn ghost d-resume">${svg('message', 14)} Resume last session</button>` : ''}
+      <button class="btn ghost d-launch hidden"></button>
+      <button class="btn ghost d-stop hidden" title="Stop the running app/site">${svg('stop', 14)} Stop</button>
       <button class="icon-btn d-folder" title="Open folder in Explorer">${svg('folder', 16)}</button>
     </div>
 
@@ -1141,6 +1420,7 @@ async function openDetail(p) {
 
   wireNotes(body, p);
   body.querySelector('.d-open').addEventListener('click', async () => { const r = await window.launcher.openProject(p.path); await handleLaunchResult(r, p.name); });
+  wireDetailLaunch(body, p);
   const dr = body.querySelector('.d-resume');
   if (dr) dr.addEventListener('click', async () => { const r = await window.launcher.resumeSession(p.path, lastId); if (r && r.ok) showStatus('Resuming last session in Claude Code…', 'ok'); else showStatus((r && r.error) || 'Could not resume.', 'warn'); });
   const df = body.querySelector('.d-folder');
@@ -1930,6 +2210,7 @@ async function init() {
       document.querySelectorAll('#settingsTabs button').forEach((t) => t.classList.toggle('active', t === tab));
       document.querySelectorAll('#view-settings .settings-pane').forEach((p) =>
         p.classList.toggle('hidden', p.dataset.pane !== pane));
+      if (pane === 'usage') renderAccountCard();
     }));
 
   document.querySelectorAll('.nav-item').forEach((n) =>
@@ -1981,6 +2262,10 @@ async function init() {
   $('optTerminal').addEventListener('change', async (e) => {
     cfg.terminalCommand = await window.launcher.setTerminal(e.target.value);
     showStatus(cfg.terminalCommand ? 'Custom terminal saved.' : 'Using auto-detect.', 'ok');
+  });
+  if ($('optPreviewTarget')) $('optPreviewTarget').addEventListener('change', async (e) => {
+    cfg.previewTarget = await window.launcher.setPreviewTarget(e.target.value);
+    showStatus(cfg.previewTarget === 'browser' ? 'Apps will open in your browser.' : 'Apps will open in an in-app window.', 'ok');
   });
   $('optBudgetWeekly').addEventListener('change', async (e) => { const r = await window.launcher.setBudget({ weekly: e.target.value }); cfg.budgetWeekly = r.budgetWeekly; showStatus('Weekly budget saved.', 'ok'); });
   $('optBudgetMonthly').addEventListener('change', async (e) => { const r = await window.launcher.setBudget({ monthly: e.target.value }); cfg.budgetMonthly = r.budgetMonthly; showStatus('Monthly budget saved.', 'ok'); });
@@ -2061,6 +2346,14 @@ async function init() {
     else if (state === 'ready') { toast.classList.add('hidden'); showUpdateBanner(info.version); if (ustate) ustate.textContent = `Update v${info.version} ready — restart to apply.`; }
     else if (state === 'current') { hideUpdateBanner(); if (checkedManually && ustate) ustate.textContent = "You're on the latest version."; checkedManually = false; }
     else if (state === 'error') { toast.classList.add('hidden'); if (checkedManually && ustate) ustate.textContent = "Couldn't check right now — try again shortly."; checkedManually = false; }
+  });
+
+  // a preview started/stopped/exited → update the running map and repaint Launch buttons
+  window.launcher.onPreviewChanged((state) => {
+    previewRunning = state || {};
+    repaintAllPreviewBtns();
+    if (typeof renderPreviewBar === 'function') renderPreviewBar();
+    if (typeof updateDetailPreview === 'function') updateDetailPreview();
   });
 
   // live auto-refresh — surgical, not a full rebuild:
@@ -2163,8 +2456,9 @@ async function sampleActiveUsage() {
   if (!list || !list.length) { el.classList.add('hidden'); el.innerHTML = ''; return; }
   el.classList.remove('hidden');
   // prefer a session that's waiting on you as the lead; else the most active
-  const lead = list.slice().sort((a, b) => (b.awaiting - a.awaiting) || (b.activeMs - a.activeMs))[0];
-  const others = list.length - 1;
+  const ordered = list.slice().sort((a, b) => (b.awaiting - a.awaiting) || (b.activeMs - a.activeMs));
+  const lead = ordered[0];
+  const otherSessions = ordered.slice(1);
   const awaiting = !!lead.awaiting;
   el.classList.toggle('awaiting', awaiting);
   const ctxPct = lead.contextTokens ? Math.min(100, Math.round(lead.contextTokens / 200000 * 100)) : 0;
@@ -2173,13 +2467,20 @@ async function sampleActiveUsage() {
   const ctxHtml = ctxPct
     ? ` · <span class="amb-ctx${ctxHigh ? ' high' : ''}" title="~${fmtTokens(lead.contextTokens)} of ~200K context window in use this session${ctxHigh ? ' — consider /compact' : ''}"><span class="amb-ctx-bar"><span style="width:${ctxPct}%"></span></span>ctx ${ctxPct}%</span>`
     : '';
+  // Every other live session is named (and clickable), not collapsed to "+N more".
+  const othersHtml = otherSessions.length
+    ? ` · ${otherSessions.map((s, i) => `<span class="amb-other" data-i="${i}" title="${escapeHtml(s.path)} — click to open">${escapeHtml(s.name)}${s.awaiting ? ' <span class="amb-wait">·waiting</span>' : ''}</span>`).join(' · ')}`
+    : '';
   el.innerHTML = `
     <span class="amb-dot"></span>
-    <span class="amb-text"><strong>${list.length} session${list.length === 1 ? '' : 's'} live</strong> · <span class="amb-name">${escapeHtml(lead.name)}</span> · ${statusTxt}${ctxHtml}${others > 0 ? ` · +${others} more` : ''}</span>
+    <span class="amb-text"><strong>${list.length} session${list.length === 1 ? '' : 's'} live</strong> · <span class="amb-name">${escapeHtml(lead.name)}</span> · ${statusTxt}${ctxHtml}${othersHtml}</span>
     <button class="btn ghost btn-xs amb-open">${svg('terminal', 13)} Open</button>
     <button class="btn ghost btn-xs amb-view">${svg('message', 13)} View</button>`;
   el.querySelector('.amb-open').addEventListener('click', () => openRow(lead));
   el.querySelector('.amb-view').addEventListener('click', () => openTranscript({ cwd: lead.path, sessionId: lead.sessionId }, 'projects'));
+  el.querySelectorAll('.amb-other').forEach((node) => {
+    node.addEventListener('click', () => openRow(otherSessions[Number(node.dataset.i)]));
+  });
   refreshLiveMetrics(); // keep the live rows' dot + last-active current
 }
 

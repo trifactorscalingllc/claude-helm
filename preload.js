@@ -68,6 +68,27 @@ contextBridge.exposeInMainWorld('launcher', {
   setTerminal: (val) => ipcRenderer.invoke('set-terminal', val),
   createProject: (root, name) => ipcRenderer.invoke('create-project', { root, name }),
   openInExplorer: (projectPath) => ipcRenderer.invoke('open-in-explorer', projectPath),
+  // ---- live preview (launch a project's app/site) ----
+  previewScan: (paths) => ipcRenderer.invoke('preview-scan', paths),
+  previewDetect: (projectPath) => ipcRenderer.invoke('preview-detect', projectPath),
+  previewState: () => ipcRenderer.invoke('preview-state'),
+  previewLaunch: (projectPath, name) => ipcRenderer.invoke('preview-launch', projectPath, name),
+  previewOpen: (projectPath, name) => ipcRenderer.invoke('preview-open', projectPath, name),
+  previewStop: (projectPath) => ipcRenderer.invoke('preview-stop', projectPath),
+  previewLog: (projectPath) => ipcRenderer.invoke('preview-log', projectPath),
+  setPreviewTarget: (val) => ipcRenderer.invoke('set-preview-target', val),
+  claudeAccount: () => ipcRenderer.invoke('claude-account'),
+  // ---- agent maker ----
+  agentsList: (projectPath) => ipcRenderer.invoke('agents-list', projectPath),
+  agentSave: (a) => ipcRenderer.invoke('agent-save', a),
+  agentDelete: (args) => ipcRenderer.invoke('agent-delete', args),
+  openAgentsFolder: (args) => ipcRenderer.invoke('open-agents-folder', args),
+  generateAgentPrompt: (args) => ipcRenderer.invoke('generate-agent-prompt', args),
+  onPreviewChanged: (cb) => {
+    const handler = (_e, state) => cb(state);
+    ipcRenderer.on('preview-changed', handler);
+    return () => ipcRenderer.removeListener('preview-changed', handler);
+  },
   onFsChanged: (cb) => {
     const handler = (_e, scope) => cb(scope);
     ipcRenderer.on('fs-changed', handler);

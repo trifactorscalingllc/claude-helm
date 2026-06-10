@@ -45,6 +45,9 @@
         <button class="nav-item" data-view="context">
           <span class="ico" data-ico="brain"></span> Context
         </button>
+        <button class="nav-item" data-view="agents">
+          <span class="ico" data-ico="user"></span> Agents
+        </button>
         <button class="nav-item" data-view="settings">
           <span class="ico" data-ico="gear"></span> Settings
         </button>
@@ -175,6 +178,15 @@
               <input id="optTerminal" type="text" placeholder="custom command, e.g. wezterm start --cwd {dir} -- bash -c &quot;{cmd}&quot;" autocomplete="off" spellcheck="false" />
             </label>
             <div class="panel-sub" style="margin-top:4px">Use <code>{dir}</code> for the project path and <code>{cmd}</code> for the Claude command. Only set this if auto-detect doesn't find your terminal.</div>
+
+            <label class="field" style="margin-top:18px">
+              <span>Launch apps &amp; sites in <span class="panel-hint" style="margin-left:0">where the <strong>Launch</strong> button opens a running page</span></span>
+              <select id="optPreviewTarget">
+                <option value="window">In-app window (its own app)</option>
+                <option value="browser">Your default browser</option>
+              </select>
+            </label>
+            <div class="panel-sub" style="margin-top:4px">Projects with an <code>index.html</code> or a <code>dev</code>/<code>start</code> script get a Launch button. The in-app window has a slim bar with reload and an “Open in browser” pop-out.</div>
           </div>
 
           <div class="panel">
@@ -259,6 +271,12 @@
 
           <!-- ===== AI & Usage ===== -->
           <div class="settings-pane hidden" data-pane="usage">
+          <div class="panel">
+            <div class="panel-title">Claude account &amp; plan</div>
+            <p class="panel-sub">Read directly from your signed-in Claude Code session (<code>~/.claude.json</code>). Your login token is never read or shown.</p>
+            <div id="accountCard" class="account-card">Reading your Claude account…</div>
+          </div>
+
           <div class="panel">
             <div class="panel-title">AI project summaries</div>
             <p class="panel-sub">Generate a one-line "what this is + where it stands" per project with Claude (<code>claude-opus-4-8</code>). Summaries are cached and only regenerate when the project changes. Your key is <strong>encrypted with your OS keychain</strong> — never stored in plaintext.</p>
@@ -405,6 +423,77 @@
         <div class="scroll">
           <p class="section-note" style="margin-top:0">What Claude has on file about you — who you are, how you like to work, your projects, and references. Pulled live from Claude's memory. Editing happens through Claude, not here.</p>
           <div id="context-body"></div>
+        </div>
+      </section>
+
+      <!-- Agents view (agent maker) -->
+      <section id="view-agents" class="view hidden">
+        <header class="topbar">
+          <h2 class="view-title">Agents</h2>
+          <button id="agentNew" class="btn primary" style="margin-left:auto"><span class="ico" data-ico="plus"></span> New agent</button>
+          <button id="agentFolder" class="btn ghost"><span class="ico" data-ico="folder"></span> Folder</button>
+        </header>
+        <div class="scroll">
+          <p class="section-note" style="margin-top:0">Build Claude Code subagents. Each is a Markdown file with frontmatter, saved to <code>~/.claude/agents</code> (global) or a project's <code>.claude/agents</code>. They show up in Claude Code automatically.</p>
+          <div class="agents-layout">
+            <div class="panel agents-list-panel">
+              <div class="panel-title">Your agents</div>
+              <div id="agentList" class="agent-list"><p class="panel-sub">Loading…</p></div>
+            </div>
+            <div class="panel agents-form-panel">
+              <div class="panel-title" id="agentFormTitle">New agent</div>
+
+              <div class="field">
+                <span>Saved to</span>
+                <div class="seg" id="agentScope">
+                  <button data-scope="global" class="active">Global (all projects)</button>
+                  <button data-scope="project">A project</button>
+                </div>
+              </div>
+              <label class="field hidden" id="agentProjectField">
+                <span>Project</span>
+                <select id="agentProject"></select>
+              </label>
+
+              <label class="field">
+                <span>Name <span class="panel-hint" style="margin-left:0">lowercase-with-dashes</span></span>
+                <input id="agentName" type="text" placeholder="code-reviewer" autocomplete="off" spellcheck="false" />
+              </label>
+              <label class="field">
+                <span>Description <span class="panel-hint" style="margin-left:0">when Claude should use this agent</span></span>
+                <input id="agentDesc" type="text" placeholder="Reviews a diff for correctness bugs before landing." autocomplete="off" />
+              </label>
+
+              <div class="field">
+                <span>Tools <span class="panel-hint" style="margin-left:0">leave all unchecked to inherit every tool</span></span>
+                <div id="agentTools" class="agent-tools"></div>
+              </div>
+
+              <label class="field">
+                <span>Model</span>
+                <select id="agentModel">
+                  <option value="inherit">Inherit from main session</option>
+                  <option value="opus">Opus (most capable)</option>
+                  <option value="sonnet">Sonnet (balanced)</option>
+                  <option value="haiku">Haiku (fastest)</option>
+                </select>
+              </label>
+
+              <label class="field">
+                <span>System prompt
+                  <button id="agentGenerate" class="btn ghost btn-xs" type="button" style="margin-left:8px"><span class="ico" data-ico="bolt"></span> Generate with Claude</button>
+                </span>
+                <textarea id="agentPrompt" rows="10" placeholder="You are a focused code reviewer. You…" spellcheck="false"></textarea>
+              </label>
+
+              <div id="agentFormMsg" class="panel-sub" style="margin:2px 0 10px"></div>
+              <div class="agent-form-actions">
+                <button id="agentSave" class="btn primary"><span class="ico" data-ico="plus"></span> Save agent</button>
+                <button id="agentDelete" class="btn ghost hidden">Delete</button>
+                <button id="agentReset" class="btn ghost">Clear</button>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 
