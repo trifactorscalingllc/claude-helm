@@ -1282,7 +1282,7 @@ function wireAgentForm() {
 
 function switchView(view) {
   document.querySelectorAll('.nav-item').forEach((n) => n.classList.toggle('active', n.dataset.view === view));
-  ['projects', 'search', 'settings', 'overview', 'analytics', 'clients', 'detail', 'context', 'agents', 'mcp', 'routines', 'transcript'].forEach((v) => {
+  ['projects', 'search', 'settings', 'overview', 'analytics', 'clients', 'detail', 'context', 'agents', 'mcp', 'api', 'routines', 'transcript'].forEach((v) => {
     const el = $(`view-${v}`);
     if (el) el.classList.toggle('hidden', view !== v);
   });
@@ -1293,6 +1293,7 @@ function switchView(view) {
   if (view === 'clients') loadClients();
   if (view === 'agents') loadAgentsView();
   if (view === 'mcp') loadMcp();
+  if (view === 'api') loadApi();
 }
 
 // ---------- Transcript viewer ----------
@@ -2343,33 +2344,98 @@ async function renderCompare() {
 async function loadMcp() {
   const body = $('mcp-body');
   if (!body) return;
-  const mcp = await window.launcher.mcpUsage(true);
+  const [mcp, recent] = await Promise.all([window.launcher.mcpUsage(true), window.launcher.mcpRecent()]);
   if (!mcp || !mcp.length) {
-    body.innerHTML = dataEmpty('plug', 'No MCP activity yet', 'When your Claude Code sessions call MCP tools (servers configured in .mcp.json or claude.ai connectors), every server, tool and call count shows up here automatically.');
+    body.innerHTML = dataEmpty('plug', 'No MCP activity yet', 'When your Claude Code sessions call MCP tools (servers configured in .mcp.json or claude.ai connectors), every server, tool, call, error and latency shows up here automatically.');
     const g = body.querySelector('.go-projects'); if (g) g.addEventListener('click', () => switchView('projects'));
     return;
   }
   const totalCalls = mcp.reduce((a, s) => a + s.count, 0);
-  const totalTools = mcp.reduce((a, s) => a + (s.toolCount || s.tools.length), 0);
-  const stat = (val, lbl) => `<div class="dash-stat">
-      <div class="dash-stat-val">${val}</div><div class="dash-stat-lbl">${lbl}</div>
+  const totalErrors = mcp.reduce((a, s) => a + (s.errors || 0), 0);
+  const lastTs = Math.max(0, ...mcp.map((s) => s.lastTs || 0));
+  const stat = (val, lbl, bad) => `<div class="dash-stat">
+      <div class="dash-stat-val${bad ? ' bad' : ''}">${val}</div><div class="dash-stat-lbl">${lbl}</div>
     </div>`;
   const max = mcp[0].count || 1;
   body.innerHTML = `<div class="dash">
     <div class="dash-stats">
       ${stat(fmtNum(mcp.length), 'Servers used')}
       ${stat(fmtNum(totalCalls), 'Tool calls · all-time')}
-      ${stat(fmtNum(totalTools), 'Distinct tools')}
-      ${stat(escapeHtml(mcp[0].server), 'Most used server')}
+      ${stat(fmtNum(totalErrors), 'Errors', totalErrors > 0)}
+      ${stat(lastTs ? relTime(lastTs) : '—', 'Last call')}
     </div>
+    ${recent && recent.length ? `<div class="panel mcp-recent">
+      <div class="panel-title">Live feed <span class="panel-hint">last ${recent.length} MCP calls, newest first</span></div>
+      <div class="mcp-feed">
+        ${recent.map((c) => `<div class="mcp-call${c.err ? ' err' : ''}">
+          <span class="mc-when">${c.ts ? relTime(c.ts) : '—'}</span>
+          <span class="mc-name">${escapeHtml(c.server)}<i>·</i>${escapeHtml(c.tool)}</span>
+          <span class="mc-proj">${escapeHtml(c.project || '')}</span>
+          <span class="mc-ms">${c.ms ? fmtDuration(c.ms) : ''}</span>
+          ${c.err ? '<span class="mc-err">error</span>' : ''}
+        </div>`).join('')}
+      </div>
+    </div>` : ''}
     ${mcp.map((s) => `<div class="panel mcp-server">
       <div class="panel-title">${escapeHtml(s.server)}
-        <span class="panel-hint">${fmtNum(s.count)} call${s.count === 1 ? '' : 's'} · ${fmtNum(s.toolCount || s.tools.length)} tool${(s.toolCount || s.tools.length) === 1 ? '' : 's'} · ${Math.round(s.count / totalCalls * 100)}% of MCP traffic</span>
+        ${s.errors ? `<span class="mcp-errchip" title="${s.errors} failed call${s.errors === 1 ? '' : 's'}">${fmtNum(s.errors)} err</span>` : ''}
+        <span class="panel-hint">${fmtNum(s.count)} call${s.count === 1 ? '' : 's'} · ${fmtNum(s.toolCount || s.tools.length)} tool${(s.toolCount || s.tools.length) === 1 ? '' : 's'} · ${Math.round(s.count / totalCalls * 100)}% of MCP traffic${s.lastTs ? ' · last used ' + relTime(s.lastTs) : ''}</span>
       </div>
       <div class="mcp-vol"><span style="width:${Math.max(2, Math.round(s.count / max * 100))}%"></span></div>
-      <div class="mcp-tools">${s.tools.map(([t, c]) => `<span class="mcp-tool">${escapeHtml(t)} <b>${fmtNum(c)}</b></span>`).join('')}</div>
+      <div class="mcp-tools">${s.tools.map(([t, c, e]) => `<span class="mcp-tool${e ? ' has-err' : ''}" ${e ? `title="${e} error${e === 1 ? '' : 's'}"` : ''}>${escapeHtml(t)} <b>${fmtNum(c)}</b>${e ? `<u>${fmtNum(e)}✕</u>` : ''}</span>`).join('')}</div>
       ${s.projects && s.projects.length ? `<div class="mcp-projects">Used in ${s.projects.map(([p, c]) => `<span class="mcp-proj">${escapeHtml(p)} <i>${fmtNum(c)}</i></span>`).join('')}</div>` : ''}
     </div>`).join('')}
+  </div>`;
+}
+
+// ---------- API tab: real billed usage from the Anthropic Admin API ----------
+async function loadApi(force) {
+  const body = $('api-body');
+  if (!body) return;
+  body.innerHTML = '<p class="panel-sub" style="padding:8px 2px">Fetching usage from the Anthropic API…</p>';
+  const r = await window.launcher.apiUsage(!!force);
+  if (!r || !r.hasKey) {
+    body.innerHTML = `<div class="welcome">
+      <div class="welcome-mark">${svg('globe', 28)}</div>
+      <h3>Connect your Anthropic Admin key</h3>
+      <p>Add an <b>organization Admin API key</b> (console.anthropic.com → Settings → API keys) and this tab pulls your real billed cost and token usage for the last 30 days — straight from Anthropic, not an estimate.</p>
+      <div class="welcome-actions"><button class="btn primary api-go-settings">${svg('gear', 14)} Open Settings</button></div>
+    </div>`;
+    const g = body.querySelector('.api-go-settings');
+    if (g) g.addEventListener('click', () => { switchView('settings'); const tab = document.querySelector('#settingsTabs [data-pane="usage"]'); if (tab) tab.click(); });
+    return;
+  }
+  if (r.error) {
+    body.innerHTML = `<div class="panel"><div class="panel-title">Couldn't reach the Anthropic API</div>
+      <p class="panel-sub">${escapeHtml(r.error)}</p></div>`;
+    return;
+  }
+  const days = r.days || [];
+  const maxCost = Math.max(0.0001, ...days.map((d) => d.cost));
+  const localCost = r.localSpend30 ? r.localSpend30.cost : null;
+  const localMs = r.localSpend30 ? r.localSpend30.activeMs : 0;
+  const stat = (val, lbl) => `<div class="dash-stat"><div class="dash-stat-val">${val}</div><div class="dash-stat-lbl">${lbl}</div></div>`;
+  body.innerHTML = `<div class="dash">
+    <div class="dash-stats">
+      ${stat(fmtCost(r.totalCost || 0), 'Billed · last 30 days')}
+      ${stat(fmtTokens(r.tokIn || 0), 'Input tokens (incl. cache)')}
+      ${stat(fmtTokens(r.tokOut || 0), 'Output tokens')}
+      ${stat(fmtDuration(localMs), 'Active time (local)')}
+    </div>
+    <div class="panel">
+      <div class="panel-title">Billed cost per day <span class="panel-hint">USD · Anthropic cost report</span></div>
+      <div class="api-chart">
+        ${days.map((d) => `<div class="api-bar" title="${escapeHtml(d.day)} — ${fmtCost(d.cost)}"><span style="height:${Math.max(2, Math.round(d.cost / maxCost * 100))}%"></span></div>`).join('')}
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Tokens by model <span class="panel-hint">last 30 days · usage report</span></div>
+      <table class="api-table">
+        <tr><th>Model</th><th>Input</th><th>Cache write</th><th>Cache read</th><th>Output</th></tr>
+        ${(r.models || []).map(([m, t]) => `<tr><td>${escapeHtml(m)}</td><td>${fmtTokens(t.in)}</td><td>${fmtTokens(t.cw)}</td><td>${fmtTokens(t.cr)}</td><td>${fmtTokens(t.out)}</td></tr>`).join('')}
+      </table>
+    </div>
+    ${localCost != null ? `<p class="panel-sub api-note">Helm's local estimate for the same window: ${fmtCost(localCost)} — billed numbers above are the source of truth (subscriptions like Max aren't billed per token, so $0 there is normal). Fetched ${relTime(r.fetchedAt)} · cached 10 min.</p>` : ''}
   </div>`;
 }
 
@@ -2813,6 +2879,18 @@ async function init() {
 
   $('tagFilter').addEventListener('change', (e) => { tagFilter = e.target.value; render(); });
   $('archToggle').addEventListener('click', () => { showArchived = !showArchived; $('archToggle').classList.toggle('active', showArchived); render(); });
+  // Compact dashboard: dense rows, no descriptions/subtrees — persisted, applied at the root
+  const applyCompact = (on) => {
+    document.documentElement.toggleAttribute('data-compact', !!on);
+    $('compactToggle').classList.toggle('active', !!on);
+  };
+  applyCompact(cfg.compactDash);
+  $('compactToggle').addEventListener('click', async () => {
+    cfg.compactDash = await window.launcher.setCompact(!cfg.compactDash);
+    applyCompact(cfg.compactDash);
+  });
+  const apiR = $('apiRefresh');
+  if (apiR) apiR.addEventListener('click', () => loadApi(true));
   $('exportCsv').addEventListener('click', async () => { const r = await window.launcher.exportCsv(); if (r && r.ok) showStatus('Exported to ' + r.path, 'ok'); });
   $('compareBtn').addEventListener('click', openCompare);
   $('compareClose').addEventListener('click', () => $('compareModal').classList.add('hidden'));
@@ -2922,6 +3000,7 @@ async function init() {
     if (Date.now() - lastOverviewLive > 25000) {
       if (!$('view-overview').classList.contains('hidden')) { lastOverviewLive = Date.now(); loadOverview(); }
       else if (!$('view-analytics').classList.contains('hidden')) { lastOverviewLive = Date.now(); loadAnalytics(overviewDays); }
+      else if (!$('view-mcp').classList.contains('hidden')) { lastOverviewLive = Date.now(); loadMcp(); } // live feed follows new calls
     }
   });
 

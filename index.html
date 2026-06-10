@@ -51,6 +51,9 @@
         <button class="nav-item" data-view="mcp">
           <span class="ico" data-ico="plug"></span> MCP
         </button>
+        <button class="nav-item" data-view="api">
+          <span class="ico" data-ico="globe"></span> API
+        </button>
         <button class="nav-item" data-view="settings">
           <span class="ico" data-ico="gear"></span> Settings
         </button>
@@ -74,6 +77,7 @@
             <input id="search" type="text" placeholder="Search projects…" autocomplete="off" spellcheck="false" />
           </div>
           <select id="tagFilter" class="filter-sel" title="Filter by tag"><option value="">All tags</option></select>
+          <button id="compactToggle" class="btn ghost" title="Compact dashboard — dense rows, no descriptions">Compact</button>
           <button id="archToggle" class="btn ghost" title="Show/hide archived projects">Archived</button>
           <button id="newBtn" class="btn primary">
             <span class="ico" data-ico="plus"></span> New project
@@ -402,10 +406,22 @@
       <section id="view-mcp" class="view hidden">
         <header class="topbar">
           <h2 class="view-title">MCP</h2>
-          <span class="topbar-sub">servers, tools &amp; call volume across your projects</span>
+          <span class="topbar-sub">live tool monitoring — calls, errors &amp; latency across your projects</span>
         </header>
         <div class="scroll">
           <div id="mcp-body"></div>
+        </div>
+      </section>
+
+      <!-- API view (real billed usage from the Anthropic Admin API) -->
+      <section id="view-api" class="view hidden">
+        <header class="topbar">
+          <h2 class="view-title">API</h2>
+          <span class="topbar-sub">billed usage &amp; tokens, straight from Anthropic — last 30 days</span>
+          <button id="apiRefresh" class="btn ghost btn-xs" title="Refetch from the API"><span class="ico" data-ico="repeat"></span> Refresh</button>
+        </header>
+        <div class="scroll">
+          <div id="api-body"></div>
         </div>
       </section>
 

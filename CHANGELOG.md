@@ -3,6 +3,13 @@
 All notable changes to Claude Helm are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/) · versions follow the `package.json` semver.
 
+## [1.18.0] - 2026-06-10
+
+### Added
+- **Compact dashboard toggle** — a "Compact" button in the projects topbar compresses everything vertically: dense rows, no descriptions, no launchable subtrees, tighter sections. Persists across launches.
+- **Real MCP tool monitoring** — the MCP tab now tracks every call's outcome: error counts per server and per tool (red chips), last-used times, and a live feed of the most recent calls with project, latency, and error status. Updates live as sessions run.
+- **API tab** — connects to the Anthropic Admin API with your org Admin key and shows real billed usage for the last 30 days: cost per day chart, token totals, per-model token breakdown, and your local active-time alongside. Straight from Anthropic — not an estimate.
+
 ## [1.17.3] - 2026-06-10
 
 ### Fixed

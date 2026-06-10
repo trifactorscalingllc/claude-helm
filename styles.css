@@ -1309,3 +1309,43 @@ details.more-detail[open] > summary::before { transform: rotate(90deg); }
 .recap-list li { font-size: 13.5px; line-height: 1.5; margin: 4px 0; color: var(--ink); }
 .recap-hint { margin-top: 10px; }
 kbd { font-family: "SFMono-Regular","Consolas",monospace; font-size: 10.5px; background: var(--cloud-2); border: 1px solid var(--line-2); border-radius: 3px; padding: 0 4px; }
+
+/* ===== Compact dashboard (toggle in the projects topbar) =====
+   Dense rows: no descriptions, no subtrees, tighter padding everywhere. */
+[data-compact] .scroll { padding: 14px 28px 30px; }
+[data-compact] .rrow { padding: 4px 14px; gap: 9px; }
+[data-compact] .rr-name { font-size: 13px; }
+[data-compact] .rr-top { gap: 7px; }
+[data-compact] .rr-sum { display: none; }
+[data-compact] .rr-sub { display: none; }
+[data-compact] .away-digest { display: none; }
+[data-compact] .ambient { padding: 6px 12px; }
+[data-compact] .section-head { margin: 2px 0 8px; }
+[data-compact] #pinnedWrap { margin-bottom: 14px; }
+
+/* ===== MCP live monitoring ===== */
+.dash-stat-val.bad { color: #c0563f; }
+.mcp-errchip { background: rgba(192, 86, 63, .12); color: #c0563f; border-radius: 10px; padding: 1px 8px; font-size: 11px; font-weight: 700; margin-left: 6px; }
+.mcp-tool.has-err u { text-decoration: none; color: #c0563f; margin-left: 4px; font-weight: 700; }
+.mcp-recent .mcp-feed { max-height: 280px; overflow-y: auto; }
+.mcp-call { display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 12px; border-bottom: 1px solid var(--line); }
+.mcp-call:last-child { border-bottom: none; }
+.mc-when { color: var(--muted); width: 92px; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.mc-name { font-family: "SFMono-Regular", "Consolas", monospace; color: var(--ink-2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mc-name i { color: var(--muted); font-style: normal; margin: 0 2px; }
+.mc-proj { color: var(--muted); margin-left: auto; flex-shrink: 0; font-size: 11.5px; }
+.mc-ms { color: var(--muted); width: 56px; text-align: right; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.mcp-call.err .mc-name { color: #c0563f; }
+.mc-err { color: #fff; background: #c0563f; border-radius: 8px; padding: 0 6px; font-size: 10px; font-weight: 700; flex-shrink: 0; }
+
+/* ===== API tab (Anthropic Admin API usage) ===== */
+.api-chart { display: flex; align-items: flex-end; gap: 3px; height: 130px; padding-top: 6px; }
+.api-bar { flex: 1; display: flex; align-items: flex-end; height: 100%; cursor: default; }
+.api-bar span { display: block; width: 100%; background: var(--grad); border-radius: 2px 2px 0 0; opacity: .85; transition: opacity .12s; }
+.api-bar:hover span { opacity: 1; }
+.api-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.api-table th { text-align: left; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; padding: 4px 12px 6px 0; border-bottom: 1px solid var(--line); font-weight: 600; }
+.api-table td { padding: 6px 12px 6px 0; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; color: var(--ink-2); }
+.api-table td:first-child { font-family: "SFMono-Regular", "Consolas", monospace; font-size: 12px; color: var(--ink); }
+.api-table tr:last-child td { border-bottom: none; }
+.api-note { margin-top: 10px; }

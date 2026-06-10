@@ -42,7 +42,7 @@ function dayKey(ts) {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 }
 
-const STORE_VERSION = 3; // bump → full re-index (v3: local-time day keys + fable pricing)
+const STORE_VERSION = 4; // bump → full re-index (v4: MCP call monitoring — errors, latency, recent feed)
 
 class Indexer {
   constructor(claudeProjectsDir, storePath) {
@@ -53,6 +53,7 @@ class Indexer {
     // ---- query caches (invalidated when a project's data changes) ----
     this._totals = new Map(); // cwd -> computed totals (heavy map merge done once)
     this._combinedDaily = null; // merged per-day map across all projects
+    this._pendingMcp = new Map(); // tool_use id -> mcp call entry awaiting its tool_result
     // ---- debounced async persistence ----
     this._saveTimer = null;
     this._saving = false;
@@ -71,6 +72,8 @@ class Indexer {
     } catch {
       this.store = { version: STORE_VERSION, files: {}, projects: {} };
     }
+    // cross-project MCP monitoring: per-server/tool aggregates + a recent-calls ring
+    if (!this.store.mcp) this.store.mcp = { servers: {}, recent: [] };
     this._totals.clear();
     this._combinedDaily = null;
     this.loaded = true;
@@ -139,7 +142,7 @@ class Indexer {
   }
 
   // Process one parsed JSONL object against a session aggregate.
-  applyEvent(o, sess, daily, hourly) {
+  applyEvent(o, sess, daily, hourly, cwd) {
     const ts = o.timestamp ? Date.parse(o.timestamp) : 0;
     if (ts) {
       if (sess.lastTs) {
@@ -203,6 +206,9 @@ class Indexer {
             const f = b.input.file_path;
             sess.files[f] = (sess.files[f] || 0) + 1;
           }
+          if (b.name.startsWith('mcp__')) this._trackMcpUse(b, ts, cwd);
+        } else if (b && b.type === 'tool_result' && b.tool_use_id) {
+          this._trackMcpResult(b, ts);
         }
       }
     }
@@ -212,6 +218,49 @@ class Indexer {
 
     // sidechain events don't speak for the main conversation's waiting state
     if (!o.isSidechain && (o.type === 'user' || o.type === 'assistant')) sess.lastType = o.type;
+  }
+
+  // ---- MCP call monitoring ----
+  // Every mcp__<server>__<tool> call is logged with its project and timestamp;
+  // the matching tool_result (next user event) fills in error status + latency.
+  _trackMcpUse(b, ts, cwd) {
+    const parts = b.name.split('__');
+    const server = parts[1] || 'unknown';
+    const tool = parts.slice(2).join('__') || b.name;
+    const m = this.store.mcp;
+    const sv = m.servers[server] = m.servers[server] || { calls: 0, errors: 0, lastTs: 0, tools: {} };
+    const tl = sv.tools[tool] = sv.tools[tool] || { calls: 0, errors: 0, lastTs: 0 };
+    sv.calls++; tl.calls++;
+    if (ts) { if (ts > sv.lastTs) sv.lastTs = ts; if (ts > tl.lastTs) tl.lastTs = ts; }
+    const entry = { ts: ts || 0, server, tool, project: (cwd || '').split(/[\\/]/).pop() || '', err: false, ms: 0 };
+    m.recent.push(entry);
+    if (m.recent.length > 300) m.recent.splice(0, m.recent.length - 300);
+    if (b.id) {
+      this._pendingMcp.set(b.id, entry);
+      // cap the correlation map — results that never arrive must not leak
+      if (this._pendingMcp.size > 400) {
+        const oldest = this._pendingMcp.keys().next().value;
+        this._pendingMcp.delete(oldest);
+      }
+    }
+  }
+
+  _trackMcpResult(b, ts) {
+    const entry = this._pendingMcp.get(b.tool_use_id);
+    if (!entry) return; // not an MCP call (or long gone)
+    this._pendingMcp.delete(b.tool_use_id);
+    if (ts && entry.ts) entry.ms = Math.max(0, ts - entry.ts);
+    if (b.is_error) {
+      entry.err = true;
+      const sv = this.store.mcp.servers[entry.server];
+      if (sv) { sv.errors++; if (sv.tools[entry.tool]) sv.tools[entry.tool].errors++; }
+    }
+  }
+
+  // Newest-first slice of the recent MCP call feed.
+  mcpRecent(limit = 60) {
+    const r = (this.store.mcp && this.store.mcp.recent) || [];
+    return r.slice(-limit).reverse();
   }
 
   // Parse new bytes of one jsonl file from the stored offset to EOF.
@@ -242,12 +291,12 @@ class Indexer {
       if (pending.length) {
         const sess = this.session(cwd, sessionId || 'unknown');
         const proj = this.project(cwd);
-        for (const po of pending) this.applyEvent(po, sess, proj.daily, proj.hourly);
+        for (const po of pending) this.applyEvent(po, sess, proj.daily, proj.hourly, cwd);
         pending.length = 0;
       }
       const sess = this.session(cwd, sessionId || 'unknown');
       const proj = this.project(cwd);
-      this.applyEvent(o, sess, proj.daily, proj.hourly);
+      this.applyEvent(o, sess, proj.daily, proj.hourly, cwd);
     }
 
     rec.offset = stat.size;
@@ -662,14 +711,20 @@ class Indexer {
         servers[server].projects[projName] = (servers[server].projects[projName] || 0) + c;
       }
     }
+    const live = (this.store.mcp && this.store.mcp.servers) || {};
     return Object.values(servers)
       .sort((a, b) => b.count - a.count)
-      .map((s) => ({
-        server: s.server, count: s.count,
-        tools: Object.entries(s.tools).sort((a, b) => b[1] - a[1]).slice(0, full ? 24 : 6),
-        toolCount: Object.keys(s.tools).length,
-        projects: full ? Object.entries(s.projects).sort((a, b) => b[1] - a[1]).slice(0, 8) : undefined,
-      }));
+      .map((s) => {
+        const lv = live[s.server] || { errors: 0, lastTs: 0, tools: {} };
+        return {
+          server: s.server, count: s.count,
+          errors: lv.errors || 0, lastTs: lv.lastTs || 0,
+          tools: Object.entries(s.tools).sort((a, b) => b[1] - a[1]).slice(0, full ? 24 : 6)
+            .map(([t, c]) => [t, c, (lv.tools[t] && lv.tools[t].errors) || 0]),
+          toolCount: Object.keys(s.tools).length,
+          projects: full ? Object.entries(s.projects).sort((a, b) => b[1] - a[1]).slice(0, 8) : undefined,
+        };
+      });
   }
 
   // Deeper analytics for the Overview: efficiency, week-over-week trend,

@@ -46,6 +46,7 @@ const DEFAULTS = {
   openAtLogin: false,  // launch Claude Helm when you log in
   startHidden: false,  // when launched at login, start minimized to the tray
   adminKey: '',        // optional Anthropic Admin API key for real billed usage
+  compactDash: false,  // compact projects dashboard (dense rows, no descriptions)
   notes: {},           // { projectPath: "freeform note" }
   previewTarget: 'window', // where Launch opens a running app/site: 'window' (in-app) | 'browser'
 };
@@ -1396,6 +1397,15 @@ ipcMain.handle('insights', () => {
 ipcMain.handle('mcp-usage', (_e, full) => {
   try { return indexer.mcpUsage(!!full); } catch { return []; }
 });
+ipcMain.handle('mcp-recent', () => {
+  try { return indexer.mcpRecent(60); } catch { return []; }
+});
+ipcMain.handle('set-compact', (_e, on) => {
+  const cfg = loadConfig();
+  cfg.compactDash = !!on;
+  saveConfig(cfg);
+  return cfg.compactDash;
+});
 ipcMain.handle('set-note', (_e, projectPath, text) => {
   const cfg = loadConfig();
   cfg.notes = cfg.notes || {};
@@ -2277,6 +2287,78 @@ ipcMain.handle('set-admin-key', (_e, key) => {
   saveConfig(cfg);
   return { hasAdminKey: !!cfg.adminKey };
 });
+// ---- API tab: real usage + cost from the Anthropic Admin API ----
+// Pulls daily cost buckets and per-model token usage for the last 30 days.
+// Cached 10 min — these org endpoints are rate-limited and the data is daily.
+let apiUsageCache = null; // { ts, data }
+async function fetchAdminPages(url, adminKey, maxPages = 10) {
+  const out = [];
+  let page = '';
+  for (let i = 0; i < maxPages; i++) {
+    const u = url + (page ? `&page=${encodeURIComponent(page)}` : '');
+    const resp = await fetch(u, { headers: { 'x-api-key': adminKey, 'anthropic-version': '2023-06-01' } });
+    if (!resp.ok) {
+      const err = resp.status === 401 || resp.status === 403 ? 'Key rejected — this needs an organization Admin API key.' : `Anthropic API error ${resp.status}.`;
+      throw new Error(err);
+    }
+    const json = await resp.json();
+    out.push(...(Array.isArray(json.data) ? json.data : []));
+    if (!json.has_more || !json.next_page) break;
+    page = json.next_page;
+  }
+  return out;
+}
+ipcMain.handle('api-usage', async (_e, force) => {
+  const cfg = loadConfig();
+  if (!cfg.adminKey) return { hasKey: false };
+  if (!force && apiUsageCache && Date.now() - apiUsageCache.ts < 10 * 60 * 1000) return apiUsageCache.data;
+  try {
+    const start = new Date(); start.setDate(start.getDate() - 29); start.setHours(0, 0, 0, 0);
+    const since = encodeURIComponent(start.toISOString());
+    const [costBuckets, usageBuckets] = await Promise.all([
+      fetchAdminPages(`https://api.anthropic.com/v1/organizations/cost_report?starting_at=${since}&limit=31`, cfg.adminKey),
+      fetchAdminPages(`https://api.anthropic.com/v1/organizations/usage_report/messages?starting_at=${since}&bucket_width=1d&group_by[]=model&limit=31`, cfg.adminKey),
+    ]);
+    // daily cost series
+    const days = costBuckets.map((b) => {
+      let cost = 0;
+      for (const r of (Array.isArray(b.results) ? b.results : [])) {
+        const amt = parseFloat(r.amount != null ? r.amount : (r.cost != null ? r.cost : 0));
+        if (!isNaN(amt)) cost += amt;
+      }
+      return { day: String(b.starting_at || '').slice(0, 10), cost };
+    });
+    // per-model token totals across the window (field names parsed defensively)
+    const models = {};
+    let tokIn = 0, tokOut = 0, tokCache = 0;
+    for (const b of usageBuckets) {
+      for (const r of (Array.isArray(b.results) ? b.results : [])) {
+        const model = r.model || 'unknown';
+        const inc = r.uncached_input_tokens || r.input_tokens || 0;
+        const out = r.output_tokens || 0;
+        const cr = r.cache_read_input_tokens || 0;
+        const cc = r.cache_creation || {};
+        const cw = (typeof cc === 'object' ? (cc.ephemeral_5m_input_tokens || 0) + (cc.ephemeral_1h_input_tokens || 0) : 0) || r.cache_creation_input_tokens || 0;
+        const m = models[model] = models[model] || { in: 0, out: 0, cr: 0, cw: 0 };
+        m.in += inc; m.out += out; m.cr += cr; m.cw += cw;
+        tokIn += inc + cr + cw; tokOut += out;
+      }
+    }
+    const data = {
+      hasKey: true, since: start.getTime(),
+      days, totalCost: days.reduce((a, d) => a + d.cost, 0),
+      models: Object.entries(models).sort((a, b) => (b[1].in + b[1].out + b[1].cr + b[1].cw) - (a[1].in + a[1].out + a[1].cr + a[1].cw)),
+      tokIn, tokOut,
+      localSpend30: (() => { try { return indexer.spendInDays(30); } catch { return null; } })(),
+      fetchedAt: Date.now(),
+    };
+    apiUsageCache = { ts: Date.now(), data };
+    return data;
+  } catch (err) {
+    return { hasKey: true, error: err.message };
+  }
+});
+
 ipcMain.handle('admin-billing', async () => {
   const cfg = loadConfig();
   if (!cfg.adminKey) return { hasKey: false };
