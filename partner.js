@@ -100,6 +100,159 @@ function memoryDirFor(home, projectPath) {
   return path.join(home, '.claude', 'projects', encoded, 'memory');
 }
 
+// The project's Claude transcripts dir (sessions live beside /memory).
+function transcriptsDirFor(home, projectPath) {
+  return path.dirname(memoryDirFor(home, projectPath));
+}
+
+// Conversation history travels with the share: copy this machine's session
+// transcripts for the project into .helm-context/sessions/. Only sessions idle
+// for a while (a live session's file changes every few seconds — syncing that
+// would churn the repo) and under a size cap.
+const SESSION_IDLE_MS = 10 * 60 * 1000;
+const SESSION_MAX_BYTES = 25 * 1024 * 1024;
+function exportSessions(projectPath) {
+  const srcDir = transcriptsDirFor(env.home, projectPath);
+  let files;
+  try { files = fs.readdirSync(srcDir).filter((f) => f.endsWith('.jsonl')); } catch { return; }
+  if (!files.length) return;
+  const dest = path.join(projectPath, CONTEXT_DIR, 'sessions');
+  fs.mkdirSync(dest, { recursive: true });
+  const now = Date.now();
+  for (const f of files) {
+    try {
+      const src = path.join(srcDir, f);
+      const st = fs.statSync(src);
+      if (now - st.mtimeMs < SESSION_IDLE_MS) continue; // still being written
+      if (st.size > SESSION_MAX_BYTES) continue;
+      const out = path.join(dest, f);
+      let outSt = null;
+      try { outSt = fs.statSync(out); } catch {}
+      if (!outSt || st.size !== outSt.size) fs.copyFileSync(src, out);
+    } catch {}
+  }
+}
+
+// One-time local-data seed: gitignored data files (dev databases, uploads…)
+// snapshotted into the share so the partner starts with real data. Deliberately
+// NOT live-synced — binary databases through git rebase = unresolvable conflicts.
+const SEED_FILE_RE = /\.(sqlite3?|db3?|realm)$/i;
+const SEED_DIR_RE = /(^|[\\/])(uploads|storage|data|databases?|db)[\\/]?$/i;
+const SEED_FILE_CAP = 50 * 1024 * 1024;
+const SEED_TOTAL_CAP = 200 * 1024 * 1024;
+function exportSeedData(projectPath) {
+  const seedDir = path.join(projectPath, CONTEXT_DIR, 'seed');
+  if (fs.existsSync(seedDir)) return { seeded: [] }; // one-time, never refreshed
+  const st = git(projectPath, ['status', '--ignored', '--porcelain']);
+  if (!st.ok) return { seeded: [] };
+  const ignored = st.out.split('\n')
+    .filter((l) => l.startsWith('!! '))
+    .map((l) => l.slice(3).replace(/^"|"$/g, '').replace(/\//g, path.sep));
+  let total = 0;
+  const seeded = [];
+  const copyFile = (rel) => {
+    try {
+      const src = path.join(projectPath, rel);
+      const size = fs.statSync(src).size;
+      if (size > SEED_FILE_CAP || total + size > SEED_TOTAL_CAP) return;
+      const out = path.join(seedDir, rel);
+      fs.mkdirSync(path.dirname(out), { recursive: true });
+      fs.copyFileSync(src, out);
+      total += size;
+      seeded.push(rel);
+    } catch {}
+  };
+  const walkDir = (rel) => {
+    let entries;
+    try { entries = fs.readdirSync(path.join(projectPath, rel), { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const r = path.join(rel, e.name);
+      if (e.isDirectory()) walkDir(r);
+      else copyFile(r);
+    }
+  };
+  for (const rel of ignored) {
+    const trimmed = rel.replace(/[\\/]+$/, '');
+    if (/(^|[\\/])(node_modules|\.git|dist|venv|\.venv|__pycache__)([\\/]|$)/i.test(trimmed)) continue;
+    let isDir = false;
+    try { isDir = fs.statSync(path.join(projectPath, trimmed)).isDirectory(); } catch { continue; }
+    if (isDir) { if (SEED_DIR_RE.test(trimmed)) walkDir(trimmed); }
+    else if (SEED_FILE_RE.test(trimmed)) copyFile(trimmed);
+  }
+  return { seeded };
+}
+
+function importSeedData(projectPath) {
+  const seedDir = path.join(projectPath, CONTEXT_DIR, 'seed');
+  if (!fs.existsSync(seedDir)) return;
+  const walk = (rel) => {
+    let entries;
+    try { entries = fs.readdirSync(path.join(seedDir, rel), { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const r = path.join(rel, e.name);
+      if (e.isDirectory()) { walk(r); continue; }
+      const target = path.join(projectPath, r);
+      try {
+        if (!fs.existsSync(target)) {
+          fs.mkdirSync(path.dirname(target), { recursive: true });
+          fs.copyFileSync(path.join(seedDir, r), target);
+        }
+      } catch {}
+    }
+  };
+  walk('');
+}
+
+// ---- auto-setup: a joined project should run, not just exist ----
+function detectInstall(projectPath) {
+  const has = (f) => fs.existsSync(path.join(projectPath, f));
+  if (!has('package.json')) return null;
+  if (has('pnpm-lock.yaml')) return { cmd: 'pnpm', args: ['install'] };
+  if (has('yarn.lock')) return { cmd: 'yarn', args: ['install'] };
+  if (has('bun.lockb') || has('bun.lock')) return { cmd: 'bun', args: ['install'] };
+  if (has('package-lock.json')) return { cmd: 'npm', args: ['ci'] };
+  return { cmd: 'npm', args: ['install'] };
+}
+
+const settingUp = new Set();
+function runSetup(projectPath, name, reason) {
+  if (process.env.HELM_SKIP_SETUP) return;
+  const plan = detectInstall(projectPath);
+  if (!plan || settingUp.has(projectPath)) return;
+  settingUp.add(projectPath);
+  setStatus(projectPath, 'installing', `${plan.cmd} ${plan.args.join(' ')}${reason ? ' — ' + reason : ''}`);
+  const { spawn } = require('child_process');
+  let child;
+  try {
+    child = spawn(plan.cmd, plan.args, { cwd: projectPath, shell: process.platform === 'win32', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (e) {
+    settingUp.delete(projectPath);
+    setStatus(projectPath, 'error', `Dependency install failed to start: ${e.message}`);
+    return;
+  }
+  let tail = '';
+  const onData = (d) => { tail = (tail + d).slice(-1500); };
+  if (child.stdout) child.stdout.on('data', onData);
+  if (child.stderr) child.stderr.on('data', onData);
+  const finish = (ok, detail) => {
+    settingUp.delete(projectPath);
+    if (ok) {
+      setStatus(projectPath, 'synced');
+      if (env.notify) env.notify(`${name} is ready`, 'Dependencies installed — the project can run.');
+    } else {
+      // npm ci is strict about lockfile drift; retry once with plain install
+      if (plan.args[0] === 'ci' && !runSetup._retried) {
+        try { fs.utimesSync(projectPath, new Date(), new Date()); } catch {}
+        setStatus(projectPath, 'error', `npm ci failed — run "npm install" in the project. ${detail.slice(-200)}`);
+      } else {
+        setStatus(projectPath, 'error', `Dependency install failed: ${detail.slice(-200)}`);
+      }
+    }
+  };
+  child.on('error', (e) => finish(false, e.message));
+  child.on('exit', (code) => finish(code === 0, tail));
+}
+
 function exportContext(projectPath) {
   const cfg = env.loadConfig();
   const dest = path.join(projectPath, CONTEXT_DIR);
@@ -152,6 +305,7 @@ function importContext(projectPath) {
     if (meta.client && !(cfg.clients || {})[projectPath]) { cfg.clients = cfg.clients || {}; cfg.clients[projectPath] = meta.client; }
     env.saveConfig(cfg);
   } catch {}
+  importSeedData(projectPath); // one-time local-data snapshot (never overwrites)
 }
 
 // ---- "everything syncs" guarantees ----
@@ -240,8 +394,10 @@ function shareProject(projectPath, partnerGithub) {
   ensureGitIdentity(projectPath);
   ensureBaselineGitignore(projectPath);
   exportContext(projectPath);
+  const seed = exportSeedData(projectPath); // one-time gitignored-data snapshot (dev dbs, uploads)
   git(projectPath, ['add', '-A']);
   forceAddEnvFiles(projectPath); // everything syncs — env files included, past .gitignore
+  git(projectPath, ['add', '-f', CONTEXT_DIR]); // seed copies match the same ignore patterns as their originals
   git(projectPath, ['commit', '-m', 'helm-partner: initial share']); // no-op if clean
 
   // 2. remote. NEVER reuse the project's own remote: it may be public or a
@@ -314,7 +470,7 @@ function shareProject(projectPath, partnerGithub) {
   cfg.partners.push({ projectPath, name, url, role: 'owner', code, remote: remoteName, deployKeyId, autoSync: true, added: Date.now() });
   env.saveConfig(cfg);
   setStatus(projectPath, 'synced');
-  return { ok: true, code, url, keyless, keyWarning, invited, inviteError, sideRemote: remoteName === 'helm-share' };
+  return { ok: true, code, url, keyless, keyWarning, invited, inviteError, sideRemote: remoteName === 'helm-share', seeded: seed.seeded };
 }
 
 // ---- partner: join with a code ----
@@ -392,7 +548,8 @@ function joinWithCode(code, projectsRoot) {
   importContext(dest);
   const finalName = path.basename(dest);
   registerPartner(dest, finalName, cloneUrl);
-  return { ok: true, path: dest, name: finalName, renamed: finalName !== name, keyless: hasKey };
+  runSetup(dest, finalName, 'first setup'); // async — deps install while the user looks around
+  return { ok: true, path: dest, name: finalName, renamed: finalName !== name, keyless: hasKey, installing: !!detectInstall(dest) };
 }
 
 // ---- the live sync loop ----
@@ -405,12 +562,19 @@ function syncOne(entry) {
     // freshen the shared context before committing (owner & partner both export their memory)
     ensureGitIdentity(p);
     exportContext(p);
+    exportSessions(p); // conversation history travels too (idle sessions only)
     forceAddEnvFiles(p); // everything syncs — new/changed env files included
+    // seed/session copies under .helm-context can match the project's own ignore
+    // patterns (e.g. "uploads/" ignores .helm-context/seed/uploads too) — force-add
+    if (fs.existsSync(path.join(p, CONTEXT_DIR))) git(p, ['add', '-f', CONTEXT_DIR]);
     const dirty = git(p, ['status', '--porcelain']).out;
     if (dirty) {
       git(p, ['add', '-A']);
       git(p, ['commit', '-m', 'helm-sync: auto']);
     }
+    const LOCKFILES = ['package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', 'bun.lock'];
+    const lockSig = () => LOCKFILES.map((f) => { try { const s = fs.statSync(path.join(p, f)); return f + s.size + s.mtimeMs; } catch { return ''; } }).join('|');
+    const lockBefore = lockSig();
     const remote = entry.remote || 'origin'; // owners of projects with their own repo sync via 'helm-share'
     const pull = git(p, ['pull', '--rebase', '--autostash', remote], 120000);
     if (!pull.ok) {
@@ -429,6 +593,7 @@ function syncOne(entry) {
     if (!push.ok && !/up.to.date/i.test(push.err)) { setStatus(p, 'error', push.err.slice(0, 200)); return; }
     importContext(p); // pick up context the other side exported
     setStatus(p, 'synced');
+    if (lockSig() !== lockBefore) runSetup(p, entry.name, 'dependencies changed'); // partner bumped deps — reinstall
   } finally {
     syncing.delete(p);
   }
@@ -598,4 +763,4 @@ async function selfTest(progress) {
   return { ok: okAll, steps, code, url, repoFull };
 }
 
-module.exports = { init, stopAll, shareProject, joinWithCode, syncOne, syncAll, list, remove, setAutoSync, decodeCode, selfTest, isHelmShareUrl };
+module.exports = { init, stopAll, shareProject, joinWithCode, syncOne, syncAll, list, remove, setAutoSync, decodeCode, selfTest, isHelmShareUrl, detectInstall, exportSeedData, exportSessions };

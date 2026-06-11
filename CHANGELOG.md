@@ -3,6 +3,16 @@
 All notable changes to Claude Helm are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/) · versions follow the `package.json` semver.
 
+## [1.21.0] - 2026-06-10
+
+### Added
+- **Joins set themselves up.** After a partner joins, Helm detects the package manager (npm/yarn/pnpm/bun from the lockfile) and installs dependencies automatically — the partner row shows "installing", then a "project is ready" ping. When a sync later pulls a changed lockfile, dependencies reinstall on their own.
+- **Local data travels (one-time seed).** Sharing now snapshots gitignored data files — dev databases (`*.sqlite`, `*.db`) and `uploads/`/`storage/`/`data/` folders — into the share, so the partner starts with real data, not an empty app. Deliberately one-time: later database changes stay local (live-syncing binary databases through git means endless conflicts). Seeds never overwrite files the partner already has. Caps: 50MB/file, 200MB total.
+- **Conversation history travels.** Each side's Claude sessions for the project sync into the share (only once a session has been idle 10+ minutes, 25MB/file cap). Project detail grows a **Partner sessions** panel — read your partner's actual conversations in the transcript viewer (and export them as Markdown). Heads up: transcripts can contain anything that appeared in them, including secrets echoed in command output — the share is private, but know it travels.
+
+### Fixed
+- Seed/session copies under `.helm-context/` are force-added past the project's own ignore patterns (e.g. `uploads/` used to also ignore the seed copy of uploads).
+
 ## [1.20.0] - 2026-06-10
 
 ### Added

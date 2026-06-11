@@ -735,7 +735,7 @@ function openPartnerShareModal() {
   const all = [...projects, ...externalProjects];
   const { el, close } = popModal(`
     <h3>Share a project with a partner</h3>
-    <p class="modal-sub">Creates a private repo, pushes the project + your Claude context, and gives you a partner code. <strong>Your partner needs nothing</strong> — no GitHub account, no sign-in: the code carries its own access key, so treat it like a password.</p>
+    <p class="modal-sub">Creates a private repo and gives you a partner code. <strong>Your partner needs nothing</strong> — no GitHub account, no sign-in: the code carries its own access key, so treat it like a password. What travels: all files (env files included), your Claude memory, your conversation history for this project, and a one-time snapshot of local data files (dev databases, uploads). On their side dependencies install automatically.</p>
     <select id="ptProject" class="filter-sel" style="width:100%">${all.map((p) => `<option value="${escapeHtml(p.path)}">${escapeHtml(p.name)}</option>`).join('')}</select>
     <div class="modal-actions">
       <button class="btn ghost pt-cancel">Cancel</button>
@@ -2032,6 +2032,29 @@ async function openDetail(p) {
       else showStatus((r && r.error) || 'Could not copy this session.', 'warn');
     });
   });
+  loadSharedSessions(body, p);
+}
+
+// Sessions synced over from a partner's machine (.helm-context/sessions).
+async function loadSharedSessions(body, p) {
+  let list = [];
+  try { list = await window.launcher.sharedSessions(p.path); } catch {}
+  if (!body.isConnected || !list.length) return;
+  const kb = (n) => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
+  const panel = document.createElement('div');
+  panel.className = 'panel';
+  panel.innerHTML = `<div class="panel-title">Partner sessions <span class="panel-hint">${list.length} · synced from your partner's machine · click to read</span></div>
+    <div class="session-list">` + list.map((s, i) => `<div class="session-row" data-shared="${i}">
+      <div class="s-main">
+        <div class="s-title">${escapeHtml(s.title || 'Untitled session')} <span class="s-open">read ›</span></div>
+        <div class="s-meta">${relTime(s.mtime)} · ${kb(s.size)}</div>
+      </div>
+    </div>`).join('') + `</div>`;
+  body.appendChild(panel);
+  panel.querySelectorAll('.session-row').forEach((row) => row.addEventListener('click', () => {
+    const s = list[Number(row.dataset.shared)];
+    if (s) openTranscript({ filePath: s.filePath, cwd: p.path }, 'detail');
+  }));
 }
 
 // ---------- overview (Phase 4) ----------

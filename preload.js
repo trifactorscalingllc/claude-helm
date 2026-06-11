@@ -51,6 +51,7 @@ contextBridge.exposeInMainWorld('launcher', {
   readTranscript: (args) => ipcRenderer.invoke('read-transcript', args),
   transcriptMarkdown: (args) => ipcRenderer.invoke('transcript-markdown', args),
   saveMarkdown: (args) => ipcRenderer.invoke('save-markdown', args),
+  sharedSessions: (projectPath) => ipcRenderer.invoke('shared-sessions', projectPath),
   pushSearch: (args) => ipcRenderer.invoke('push-search', args),
   saveSearch: (args) => ipcRenderer.invoke('save-search', args),
   deleteSearch: (id) => ipcRenderer.invoke('delete-search', id),

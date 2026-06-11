@@ -157,7 +157,6 @@ const memDirFor = (home, proj) => path.join(home, '.claude', 'projects', proj.re
   sh(projE, 'git', ['push', 'origin', brE]); // the project's own repo has the clean version
   sh(projE, 'git', ['push', '-u', 'helm-share', brE]);
   const entryE = { projectPath: projE, name: 'has-own-repo', url: shareRemote, role: 'owner', remote: 'helm-share', autoSync: true };
-  const cfgA = A.cfg(); cfgA.partners = [entryE]; A.env.saveConfig(cfgA);
   write(path.join(projE, 'feature.js'), 'console.log(2)');
   partner.syncOne(entryE);
   const shareTree = sh(projE, 'git', ['ls-tree', '-r', '--name-only', 'helm-share/' + brE]).stdout;
@@ -187,8 +186,59 @@ const memDirFor = (home, proj) => path.join(home, '.claude', 'projects', proj.re
   const jk2 = partner.joinWithCode(codeV2, projectsF);
   check('v2 rejoin adopts in place', jk2.ok && jk2.adopted === true, jk2.error || JSON.stringify(jk2));
 
+  console.log('\n[8] local-data seed: gitignored dbs/uploads snapshot once, never overwrite');
+  partner.init(A.env);
+  const entryA = A.cfg().partners.find((x) => x.projectPath === projA);
+  write(path.join(projA, 'dev.sqlite'), 'OWNER-DB-DATA');
+  write(path.join(projA, 'uploads', 'logo.png'), 'PNG-BYTES');
+  write(path.join(projA, 'debug.log'), 'not data — must not seed');
+  fs.appendFileSync(path.join(projA, '.gitignore'), 'dev.sqlite\nuploads/\n*.log\n');
+  const seedRes = partner.exportSeedData(projA);
+  check('db + uploads seeded', seedRes.seeded.includes('dev.sqlite') && seedRes.seeded.some((s) => s.includes('logo.png')), seedRes.seeded);
+  check('logs not seeded', !seedRes.seeded.some((s) => s.includes('debug.log')));
+  check('seed is one-time (second call no-ops)', partner.exportSeedData(projA).seeded.length === 0);
+  partner.syncOne(entryA); // commits + pushes the seed
+  partner.init(B.env);
+  partner.syncOne(B.cfg().partners[0]); // partner pulls it
+  check('partner received the db seed', fs.existsSync(path.join(projB, '.helm-context', 'seed', 'dev.sqlite')));
+  write(path.join(projB, 'dev.sqlite'), 'PARTNER-LOCAL-DB'); // simulate partner already having data
+  partner.syncOne(B.cfg().partners[0]); // importContext runs importSeedData
+  check('seed never overwrites existing data', fs.readFileSync(path.join(projB, 'dev.sqlite'), 'utf8') === 'PARTNER-LOCAL-DB');
+  fs.rmSync(path.join(projB, 'uploads'), { recursive: true, force: true });
+  partner.syncOne(B.cfg().partners[0]);
+  check('missing seeded files restored on partner', fs.existsSync(path.join(projB, 'uploads', 'logo.png')));
+
+  console.log('\n[9] auto-setup detection (no network — mapping only)');
+  const det = path.join(tmp, 'detect');
+  fs.mkdirSync(det, { recursive: true });
+  check('no package.json → no setup', partner.detectInstall(det) === null);
+  write(path.join(det, 'package.json'), '{}');
+  check('bare package.json → npm install', JSON.stringify(partner.detectInstall(det)) === JSON.stringify({ cmd: 'npm', args: ['install'] }));
+  write(path.join(det, 'package-lock.json'), '{}');
+  check('package-lock → npm ci', partner.detectInstall(det).args[0] === 'ci');
+  write(path.join(det, 'yarn.lock'), '');
+  check('yarn.lock wins over npm lock', partner.detectInstall(det).cmd === 'yarn');
+  write(path.join(det, 'pnpm-lock.yaml'), '');
+  check('pnpm lock wins', partner.detectInstall(det).cmd === 'pnpm');
+
+  console.log('\n[10] conversation history export (idle sessions only)');
+  partner.init(A.env);
+  const trA = path.dirname(memDirFor(A.home, projA));
+  write(path.join(trA, 'sess-old.jsonl'), JSON.stringify({ type: 'ai-title', aiTitle: 'Old finished session' }) + '\n');
+  const old = new Date(Date.now() - 30 * 60000);
+  fs.utimesSync(path.join(trA, 'sess-old.jsonl'), old, old);
+  write(path.join(trA, 'sess-live.jsonl'), JSON.stringify({ type: 'ai-title', aiTitle: 'Live right now' }) + '\n'); // fresh mtime
+  partner.exportSessions(projA);
+  check('idle session exported', fs.existsSync(path.join(projA, '.helm-context', 'sessions', 'sess-old.jsonl')));
+  check('live session NOT exported (still being written)', !fs.existsSync(path.join(projA, '.helm-context', 'sessions', 'sess-live.jsonl')));
+  partner.syncOne(A.cfg().partners[0]);
+  partner.init(B.env);
+  partner.syncOne(B.cfg().partners[0]);
+  check('partner received the session history', fs.existsSync(path.join(projB, '.helm-context', 'sessions', 'sess-old.jsonl')));
+
   partner.stopAll();
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
   console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL TESTS PASSED');
   process.exit(failures ? 1 : 0);
 })();
+

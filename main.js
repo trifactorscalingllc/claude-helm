@@ -1369,6 +1369,34 @@ ipcMain.handle('transcript-markdown', async (_e, { filePath, cwd, sessionId, thi
   return { ok: true, markdown, suggestedName };
 });
 
+// ---- partner-synced conversation history (.helm-context/sessions) ----
+// Lists the OTHER side's sessions; this machine's own sessions already show in
+// the normal list. Read via the regular transcript viewer (filePath).
+ipcMain.handle('shared-sessions', (_e, projectPath) => {
+  try {
+    const dir = path.join(projectPath, '.helm-context', 'sessions');
+    if (!fs.existsSync(dir)) return [];
+    return fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl')).map((f) => {
+      const full = path.join(dir, f);
+      const sessionId = f.replace(/\.jsonl$/, '');
+      if (indexer.sessionFile(projectPath, sessionId)) return null; // mine — already listed
+      const st = fs.statSync(full);
+      let title = '';
+      try {
+        const fd = fs.openSync(full, 'r');
+        const buf = Buffer.alloc(65536);
+        const n = fs.readSync(fd, buf, 0, buf.length, 0);
+        fs.closeSync(fd);
+        for (const line of buf.toString('utf8', 0, n).split('\n')) {
+          if (!line.trim()) continue;
+          try { const o = JSON.parse(line); if (o.aiTitle) { title = o.aiTitle; break; } } catch {}
+        }
+      } catch {}
+      return { filePath: full, sessionId, title, size: st.size, mtime: st.mtimeMs };
+    }).filter(Boolean).sort((a, b) => b.mtime - a.mtime);
+  } catch { return []; }
+});
+
 ipcMain.handle('save-markdown', async (_e, { markdown, suggestedName }) => {
   try {
     const res = await dialog.showSaveDialog(mainWindow, {
