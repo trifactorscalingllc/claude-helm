@@ -105,6 +105,33 @@ const memDirFor = (home, proj) => path.join(home, '.claude', 'projects', proj.re
   check('partner got the new file', fs.existsSync(path.join(projB, 'styles.css')));
   check('partner got the new memory', fs.existsSync(path.join(memDirFor(B.home, projB), 'new-insight.md')));
 
+  console.log('\n[5] joining is never a dead end (existing folders)');
+  // rejoin after "Stop": the folder stays on disk by design — the same code must reconnect it
+  partner.init(B.env);
+  const cfgB = B.cfg();
+  cfgB.partners = [];
+  B.env.saveConfig(cfgB);
+  const rejoin = partner.joinWithCode(code, projectsB);
+  check('rejoin adopts the existing folder', rejoin.ok && rejoin.adopted === true, rejoin.error || JSON.stringify(rejoin));
+  check('rejoin points at the same path', rejoin.path === projB, rejoin.path);
+  check('partner entry restored', B.cfg().partners.some((x) => x.projectPath === projB));
+
+  // an unrelated folder owns the name → clone lands beside it, not refused
+  const projectsC = path.join(tmp, 'projects-C');
+  fs.mkdirSync(path.join(projectsC, 'client-site'), { recursive: true });
+  write(path.join(projectsC, 'client-site', 'mine.txt'), 'an unrelated project');
+  const beside = partner.joinWithCode(code, projectsC);
+  check('occupied name clones beside it', beside.ok && beside.renamed === true, beside.error || JSON.stringify(beside));
+  check('lands in name-shared', path.basename(beside.path) === 'client-site-shared', beside.path);
+  check('original folder untouched', fs.existsSync(path.join(projectsC, 'client-site', 'mine.txt')));
+  check('share files arrived in the new folder', fs.existsSync(path.join(beside.path, 'index.html')));
+
+  // an empty husk from a cancelled clone → reused, not refused
+  const projectsD = path.join(tmp, 'projects-D');
+  fs.mkdirSync(path.join(projectsD, 'client-site'), { recursive: true });
+  const husk = partner.joinWithCode(code, projectsD);
+  check('empty leftover folder is reused', husk.ok && !husk.renamed && path.basename(husk.path) === 'client-site', husk.error || husk.path);
+
   partner.stopAll();
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
   console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL TESTS PASSED');

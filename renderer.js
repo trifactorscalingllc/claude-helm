@@ -776,9 +776,25 @@ function openPartnerJoinModal() {
   el.querySelector('.pt-go').addEventListener('click', async (ev) => {
     const btn = ev.currentTarget; btn.disabled = true; btn.textContent = 'Cloning…';
     const r = await window.launcher.partnerJoin(el.querySelector('#ptCode').value);
-    close();
-    if (r && r.ok) { showStatus(`Joined ${r.name} — it's in your projects now and will stay in sync.`, 'ok'); await loadProjects(); loadPartners(); }
-    else showStatus((r && r.error) || 'Could not join.', 'warn');
+    if (r && r.ok) {
+      close();
+      const msg = r.adopted
+        ? `Reconnected — your existing "${r.name}" folder is syncing with this share again.`
+        : r.renamed
+          ? `Joined as "${r.name}" — you already had a different folder with the original name, so the share lives beside it.`
+          : `Joined ${r.name} — it's in your projects now and will stay in sync.`;
+      showStatus(msg, 'ok'); await loadProjects(); loadPartners();
+    } else {
+      // failure must stay on screen — a toast behind a closing modal reads as "nothing happened"
+      btn.disabled = false; btn.textContent = 'Join';
+      let err = el.querySelector('.pt-err');
+      if (!err) {
+        err = document.createElement('p');
+        err.className = 'pt-err';
+        el.querySelector('.modal-actions').before(err);
+      }
+      err.textContent = (r && r.error) || 'Could not join.';
+    }
   });
 }
 

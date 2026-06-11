@@ -230,25 +230,66 @@ function shareProject(projectPath, partnerGithub) {
 }
 
 // ---- partner: join with a code ----
+// Same repo regardless of URL form (https vs ssh, trailing .git).
+function repoKey(u) {
+  return String(u || '').trim().toLowerCase()
+    .replace(/\.git$/, '')
+    .replace(/^git@([^:]+):/, 'https://$1/')
+    .replace(/^ssh:\/\/git@/, 'https://');
+}
+
+function registerPartner(dest, name, url) {
+  const cfg = env.loadConfig();
+  cfg.partners = (cfg.partners || []).filter((x) => x.projectPath !== dest);
+  const entry = { projectPath: dest, name, url, role: 'partner', autoSync: true, added: Date.now() };
+  cfg.partners.push(entry);
+  env.saveConfig(cfg);
+  setStatus(dest, 'synced');
+  return entry;
+}
+
 function joinWithCode(code, projectsRoot) {
   const payload = decodeCode(code);
   if (!payload || !payload.url) return { ok: false, error: 'That code is not a valid partner code.' };
   if (!git(projectsRoot, ['--version']).ok) return { ok: false, error: 'git is required — install it from git-scm.com.' };
   const name = (payload.name || 'partner-project').replace(/[<>:"/\\|?*]/g, '-');
-  const dest = path.join(projectsRoot, name);
-  if (fs.existsSync(dest)) return { ok: false, error: `"${name}" already exists in your projects folder.` };
+  let dest = path.join(projectsRoot, name);
+
+  // A folder with this name already exists. Joining must never be a dead end:
+  // stopping a share leaves files on disk (by design), so rejoining the same
+  // repo has to reconnect that folder instead of refusing forever.
+  if (fs.existsSync(dest)) {
+    const origin = fs.existsSync(path.join(dest, '.git')) ? git(dest, ['remote', 'get-url', 'origin']).out : '';
+    if (origin && repoKey(origin) === repoKey(payload.url)) {
+      ensureGitIdentity(dest);
+      importContext(dest);
+      const entry = registerPartner(dest, name, payload.url);
+      try { syncOne(entry); } catch {}
+      return { ok: true, path: dest, name, adopted: true };
+    }
+    let leftoverEmpty = false;
+    try { leftoverEmpty = fs.readdirSync(dest).length === 0; } catch {}
+    if (leftoverEmpty) {
+      // a failed/cancelled clone left an empty husk — reuse the name
+      try { fs.rmdirSync(dest); } catch {}
+    } else {
+      // a different project owns this name — clone beside it instead of refusing
+      let n = 2;
+      let alt = path.join(projectsRoot, `${name}-shared`);
+      while (fs.existsSync(alt)) alt = path.join(projectsRoot, `${name}-shared-${n++}`);
+      dest = alt;
+    }
+  }
+
   const c = git(projectsRoot, ['clone', payload.url, dest], 300000);
   if (!c.ok) {
     return { ok: false, error: 'Clone failed — make sure the owner gave your GitHub account access, and that git can sign in (it may pop up a browser). Details: ' + c.err.slice(0, 300) };
   }
   ensureGitIdentity(dest);
   importContext(dest);
-  const cfg = env.loadConfig();
-  cfg.partners = (cfg.partners || []).filter((x) => x.projectPath !== dest);
-  cfg.partners.push({ projectPath: dest, name, url: payload.url, role: 'partner', autoSync: true, added: Date.now() });
-  env.saveConfig(cfg);
-  setStatus(dest, 'synced');
-  return { ok: true, path: dest, name };
+  const finalName = path.basename(dest);
+  registerPartner(dest, finalName, payload.url);
+  return { ok: true, path: dest, name: finalName, renamed: finalName !== name };
 }
 
 // ---- the live sync loop ----

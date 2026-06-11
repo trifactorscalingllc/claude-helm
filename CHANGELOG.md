@@ -3,6 +3,12 @@
 All notable changes to Claude Helm are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/) · versions follow the `package.json` semver.
 
+## [1.19.1] - 2026-06-10
+
+### Fixed
+- **Joining a shared project is never a dead end anymore.** If your projects folder already had a folder with the share's name, Join refused — and since stopping a share keeps the files on disk (by design), rejoining the same project was impossible without manual folder surgery. Now: the same repo is *reconnected* in place (rejoin just works), an empty leftover folder from a cancelled clone is reused, and an unrelated folder with the same name gets the share cloned beside it as `name-shared`.
+- **Join failures now show inside the Join dialog** in red and keep it open. Before, the error was a brief toast behind the closing dialog — entering a code and "nothing happening" was this bug.
+
 ## [1.19.0] - 2026-06-10
 
 ### Added
