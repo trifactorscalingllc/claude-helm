@@ -3,6 +3,11 @@
 All notable changes to Claude Helm are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/) · versions follow the `package.json` semver.
 
+## [Unreleased]
+
+### Fixed
+- **Clear error for Windows-unreachable project folders** — folders whose names end in a dot or space (e.g. `T.O.M.`) exist on disk but can't be entered by any Windows terminal, so launching them flashed Windows Terminal's cryptic `0x8007010B Could not access starting directory`. Helm now explains the problem and tells you to rename the folder, instead of copying a fallback `cd` command that fails the same way. Missing folders (stale rows) also get a plain "Folder not found" message.
+
 ## [1.18.0] - 2026-06-10
 
 ### Added

@@ -1125,6 +1125,17 @@ function spawnTerminal(projectPath, cmd, custom) {
   const platform = process.platform;
   const fallbackCmd = `cd "${projectPath}" && ${cmd}`;
 
+  // Win32 strips trailing dots/spaces during path normalization, so a folder like
+  // "T.O.M." can exist on disk (Node sees it) yet no terminal can start in it
+  // (ERROR_DIRECTORY 0x8007010B). No `command` fallback for these — a manual cd
+  // into the same path fails the same way.
+  if (platform === 'win32' && /[. ]$/.test(path.basename(projectPath))) {
+    return { ok: false, error: `Windows can't open "${path.basename(projectPath)}" — folder names ending in a dot or space are unreachable from terminals. Rename the folder to drop the trailing character, then try again.` };
+  }
+  if (!fs.existsSync(projectPath)) {
+    return { ok: false, error: `Folder not found: ${projectPath}` };
+  }
+
   // advanced: user-supplied template with {dir} / {cmd}
   if (custom && custom.trim()) {
     try {
